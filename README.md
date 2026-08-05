@@ -1,102 +1,147 @@
-# 🚀 抖音下载 (Douyin-DL)
+<div align="center">
 
-<a href="https://github.com/xiaohuitongxue88-ctrl/douyin-downloader" target="_blank">👉 GitHub 开源主页</a> | <a href="https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues" target="_blank">🐛 提交问题反馈</a>
+# 🎵 Douyin Downloader
 
-一款功能强大、界面精致的抖音（Douyin）网页版增强下载工具。支持无水印视频下载、图集打包、弹幕导出、作者主页批量下载，并原生支持与 Aria2 及 AB Download Manager 联动。
+<p><strong>抖音网页版增强下载工具</strong></p>
 
-[![最新版本](https://img.shields.io/badge/版本-v1.0.7-orange?style=flat&logo=tampermonkey)](#)
-[![开源协议](https://img.shields.io/badge/许可证-MIT-green)](#)
-[![支持下载器](https://img.shields.io/badge/外部下载器-Aria2%20%7C%20ABDM-blue)](#)
-[![UI框架](https://img.shields.io/badge/UI-Preact%20%7C%20CSS--in--JS-black)](#)
+无水印视频 · 高清图集 · 背景音乐 · 弹幕字幕 · 作者作品批量下载
 
-> 💡 **V1.0.7 更新亮点**：修复批量管理器选择/检查器同步问题，恢复一级下载记录入口；新增状态悬浮信息与作者作品一次性完整扫描/全选功能。
+[![点赞](https://img.shields.io/github/stars/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&logo=github&label=%E7%82%B9%E8%B5%9E&color=f5c518)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/stargazers)
+[![最近提交](https://img.shields.io/github/last-commit/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4&color=7c3aed)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/commits/main)
+[![最新版本](https://img.shields.io/github/v/release/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=ea580c&include_prereleases)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases)
+[![许可证](https://img.shields.io/github/license/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E8%AE%B8%E5%8F%AF%E8%AF%81&color=16a34a)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/LICENSE)
+[![下载量](https://img.shields.io/github/downloads/xiaohuitongxue88-ctrl/douyin-downloader/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E9%87%8F&color=0ea5e9)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases)
 
----
+[**立即安装脚本**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js) · [功能介绍](#-功能概览) · [界面预览](#-界面预览) · [安装指南](#-安装与使用) · [问题反馈](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues)
 
-### ✨ 核心功能特性
+</div>
 
-* 🎬 **全场景媒体下载**：支持无水印视频、高清图集、封面大图及背景原声提取。
-* 📦 **强大的批量下载器**：
-  * 在作者主页一键扫描全部作品，支持快速全选。
-  * 独立的“下载任务中心”悬浮胶囊，实时显示下载进度与失败重试管理。
-* ⚡ **多协议下载器联动**：
-  * 内置浏览器流式下载（自动降级兼容）。
-  * 原生支持推送到 **Aria2 RPC** 与 **AB Download Manager**，轻松应对大批量下载。
-* 💬 **弹幕与数据导出**：
-  * 一键将当前视频弹幕导出为标准的 **.ass 字幕文件**（含颜色与时间轴）。
-  * 内置“媒体资源/作品信息/JSON”检查器，方便技术同好获取原始数据。
-* 🎨 **原生级无感交互 (GPU Safe)**：
-  * 采用 Graphite Cobalt 设计系统，无毛玻璃、无高占用动画，适合长时间挂机运行。
-  * 快捷键支持：按下 `M` 键即可秒下当前媒体！
+> [!IMPORTANT]
+> 当前脚本版本为 **v1.0.7**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请先在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录，再提交新的问题。
 
----
+## ✨ 项目简介
 
-**📸 界面预览与功能演示**
+Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。它把单个作品下载、作者主页批量扫描、下载任务管理和媒体信息查看整合到统一界面中，并兼顾长时间运行时的流畅度与低干扰体验。
 
-**1. 播放页悬浮插件与快速下载**
-> 在视频播放页右下角自动注入“插件”入口，点击即可快速调出下载与配置菜单。
+## 🚀 功能概览
+
+| 使用场景 | 主要能力 |
+| --- | --- |
+| 🎬 单个作品 | 下载无水印视频、高清图集、封面大图和背景音乐 |
+| 📦 作者主页 | 一次性扫描作者作品，支持批量选择与提交下载任务 |
+| 💬 弹幕导出 | 将当前视频弹幕导出为带颜色和时间轴的 `.ass` 字幕文件 |
+| ⚡ 下载方式 | 支持浏览器直接下载，并可联动 Aria2 RPC 与 AB Download Manager |
+| 🧭 任务管理 | 查看下载进度、速度和任务状态，支持失败任务重试与排查 |
+| 🔍 信息检查 | 查看媒体资源、作品信息及原始 JSON 数据 |
+
+### 设计与性能
+
+- 采用 **Graphite Cobalt** 视觉体系，界面简洁、信息层级清晰。
+- 不使用高开销毛玻璃和持续动画，降低长期运行时的资源占用。
+- 功能面板与原网页保持相对独立，尽量减少对抖音原有操作的干扰。
+- 支持快捷键 `M`，可快速下载当前媒体。
+
+## 🆕 v1.0.7 更新亮点
+
+- 修复批量管理器选择状态与检查器不同步的问题。
+- 修复管理器与悬浮胶囊互斥、任务封面和设置窗口裁切问题。
+- 恢复一级下载记录入口。
+- 新增任务状态悬浮信息。
+- 新增作者作品一次性完整扫描与快速全选。
+
+## 📸 界面预览
+
+### 1. 播放页悬浮入口与快速下载
+
+进入视频播放页后，页面右下角会显示“插件”入口，可快速打开下载及配置菜单。
+
 ![播放页插件入口](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114600_342_86.png?raw=true)
 
----
+### 2. 媒体资源与清晰度解析
 
-**2. 媒体资源与清晰度解析**
-> 支持独立弹窗查看高清封面、不同分辨率视频源、音轨提取及原始 JSON 数据。
+可在独立窗口中查看高清封面、不同清晰度的视频源、音轨和原始 JSON 数据。
+
 ![媒体资源解析](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114623_343_86.png?raw=true)
 
----
+### 3. 作者主页批量扫描与选择
 
-**3. 作者主页批量扫描与选择**
+1. 进入作者主页，页面右下角会自动显示批量控制面板入口。
+2. 展开面板并扫描作品，按需勾选后提交批量下载任务。
 
-* **步骤 1：** 进入作者主页，右下角自动唤起批量控制面板入口。
-  ![作者主页入口](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
+![批量扫描面板](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
 
-* **步骤 2：** 点击展开后，即可一键扫描作品、勾选并提交下载任务。
-  ![批量扫描面板](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
+### 4. 批量下载任务中心
 
----
+通过独立任务窗口查看下载进度、速度和状态，并对失败任务进行重试或排查。
 
-**4. 批量下载任务管理中心**
-> 独立的任务管理弹窗，实时查看下载进度、下载速度，支持暂停、重试与失败排查。
 ![批量下载任务中心](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
 
+## 📖 安装与使用
+
+### 第一步：安装 Tampermonkey
+
+请先在 Chrome、Edge 或其他 Chromium 内核浏览器中安装 **Tampermonkey（油猴）** 扩展。
+
+### 第二步：安装脚本
+
+点击 [**立即安装 Douyin Downloader**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js)，Tampermonkey 打开安装页面后，确认脚本版本并点击“安装”。
+
+### 第三步：开始使用
+
+- **下载当前作品**：打开任意抖音视频播放页，点击右下角“插件”，或按下快捷键 `M`。
+- **批量下载作品**：进入作者主页，展开右下角控制面板，扫描、选择并提交任务。
+- **调整高级设置**：在控制面板中打开“设置”，配置清晰度策略、文件名规则和外部下载器。
+
+文件名规则示例：`${nickname}_${short_id}`
+
+### 可选：连接外部下载器
+
+如需处理较多任务，可在设置中配置 **Aria2 RPC** 或 **AB Download Manager**。不配置外部下载器时，脚本仍可使用浏览器下载方式。
+
+## 🛠️ 问题反馈
+
+提交问题前，请依次完成以下检查：
+
+1. 通过 [最新脚本地址](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js) 重新安装或更新脚本。
+2. 在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索相同现象。
+3. 确认问题能够重复出现，并记录具体操作步骤。
+
+新建 Issue 时，建议同时提供：
+
+- 浏览器与 Tampermonkey 版本。
+- 出现问题的页面类型，例如播放页或作者主页。
+- 从打开页面到出现问题的完整操作步骤。
+- 错误截图；如方便，也可附上浏览器控制台中的相关报错。
+
+你也可以加入 QQ 群交流：
+
+<a href="https://qm.qq.com/cgi-bin/qm/qr?k=-SMNW4O5qbcPHHzFZLARGrN-7IX_5OCS&jump_from=webapi&authKey=w6zQgg9u7I7LyFPJda67hr6MWML+9x0xAV4VbZRE5F9ypeiPCkfOMa05yLhgQ/1N"><img src="https://pub.idqqimg.com/wpa/images/group.png" alt="加入 QQ 群：人生自古誰无死"></a>
+
+> 若加群链接失效，请直接在 [GitHub Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中留言。
+
+## 🙏 特别鸣谢
+
+本项目基于 [zhzLuke96/douyin-dl-user-js](https://github.com/zhzLuke96/douyin-dl-user-js) 进行 UI 重构、逻辑优化与功能扩展。感谢原作者的探索与开源分享。
+
+## 📄 开源许可证
+
+本项目采用 [MIT License](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/LICENSE) 开源。
+
+## ⚖️ 免责声明
+
+> 本项目坚持开源、共享和免费，仅供技术研究与合法的个人数据备份使用。
+
+1. 请遵守所在地法律法规、平台服务协议及版权规定。
+2. 禁止将本项目用于商业侵权、大规模违规采集、倒卖或其他非法用途。
+3. 因使用者不当操作造成的账号异常、版权纠纷、网络安全风险或其他后果，由使用者自行承担。
+4. 下载内容的版权归原作者或相应权利人所有，请勿进行未经授权的商业使用或二次分发。
+
 ---
 
-### 📖 安装与使用指南
+<div align="center">
 
-1. **安装环境**：请确保您的浏览器已安装 Tampermonkey (油猴) 扩展程序。
-2. **获取脚本**：点击上方的安装按钮完成脚本添加。
-3. **如何使用**：
-   * **单文件下载**：打开任意抖音视频播放页，点击右下角功能栏的 **[插件]** 按钮，或直接按下键盘 **`M` 键**。
-   * **批量下载**：进入任意作者主页，右下角会自动出现“插件”控制面板，点击展开即可扫描并管理批量下载任务。
-   * **高级设置**：在弹出的控制面板中点击“设置”，可配置自定义文件名规则（如 `${nickname}_${short_id}`）、清晰度策略及外部下载器参数。
+如果这个项目对你有帮助，欢迎点亮一个 ⭐ Star。
 
----
+[返回顶部](#-douyin-downloader)
 
-### 💬 交流与反馈
-
-在使用过程中遇到任何 Bug、有好的功能建议，或者单纯想进行技术交流，欢迎加入我们的 QQ 群：
-
-<a target="_blank" href="https://qm.qq.com/cgi-bin/qm/qr?k=-SMNW4O5qbcPHHzFZLARGrN-7IX_5OCS&jump_from=webapi&authKey=w6zQgg9u7I7LyFPJda67hr6MWML+9x0xAV4VbZRE5F9ypeiPCkfOMa05yLhgQ/1N"><img border="0" src="https://pub.idqqimg.com/wpa/images/group.png" alt="人生自古誰无死" title="人生自古誰无死"></a>
-
-*(若加群链接失效，您也可以在 GitHub 的 Issues 中留言反馈)*
-
----
-
-### 🙏 特别鸣谢 (Acknowledgments)
-
-本项目的发展离不开开源社区的分享精神。在此，向原作者 **zhzLuke96** 表达最诚挚的感谢！
-
-本脚本是在其优秀的开源项目基础上，进行了深度的 UI 重构、逻辑优化与二次开发的成果。正是原作者前期的探索启发与无私奉献的代码，才有了当前版本更为丰富和稳定的体验。饮水思源，向开源前辈致敬！
-
-* 🌟 原项目指路：<a href="https://github.com/zhzLuke96/douyin-dl-user-js" target="_blank">zhzLuke96/douyin-dl-user-js</a>
-
----
-
-### ⚖️ 免责声明 (Disclaimer)
-
-> **本项目秉持开源、共享、免费的原则，仅供学术探讨与合法的个人数据备份使用。**
->
-> 1. **合法合规**：请严格遵守所在地法律法规及相关平台的用户服务协议。严禁将本脚本用于商业侵权、大规模数据爬取牟利或其他非法用途。
-> 2. **风险自担**：因使用者不当使用本工具而导致的账号异常、版权纠纷、网络安全风险或其他附带后果，均由使用者自行承担，开发者概不负责。
-> 3. **反商业化**：严禁任何人对本脚本进行倒卖、二次打包付费转售或恶意修改后冒充原作者进行收费传播。
-> 4. **版权尊重**：下载之媒体资源（含视频、图集、音乐等）版权均归原作者及平台所有，切勿用于未授权的商业剪辑或二次分发。
+</div>
