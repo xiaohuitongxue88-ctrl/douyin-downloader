@@ -17,7 +17,7 @@
 </div>
 
 > [!IMPORTANT]
-> 当前脚本版本为 **v1.0.7**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请先在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录，再提交新的问题。
+> 当前脚本版本为 **v1.0.9**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请先在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录，再提交新的问题。
 
 ## ✨ 项目简介
 
@@ -41,7 +41,7 @@ Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。
 - 功能面板与原网页保持相对独立，尽量减少对抖音原有操作的干扰。
 - 支持快捷键 `M`，可快速下载当前媒体。
 
-## 🆕 v1.0.7 更新亮点
+## 🆕 v1.0.9 更新亮点
 
 - 修复批量管理器选择状态与检查器不同步的问题。
 - 修复管理器与悬浮胶囊互斥、任务封面和设置窗口裁切问题。
