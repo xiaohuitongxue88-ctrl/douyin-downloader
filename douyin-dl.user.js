@@ -1,18 +1,54 @@
 // ==UserScript==
-// @name         抖音网页版增强下载工具
-// @namespace    https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
-// @version      1.0.7
-// @description  抖音网页版增强下载工具，支持无水印视频下载、图集打包、字幕导出及作者主页批量扫描下载。
-// @author       小辉同學
-// @match        https://*.douyin.com/*
-// @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTE1MWMiLz48cGF0aCBkPSJNMTcgMTdoMTFjMTEgMCAxOCA1IDE4IDE1cy03IDE1LTE4IDE1SDE3em0xMCAyM2M3IDAgMTAtMiAxMC04cy0zLTgtMTAtOGgtMnYxNnoiIGZpbGw9IiM4ZmE3ZmYiLz48L3N2Zz4=
-// @license      MIT
-// @require      https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js
-// @grant        GM_xmlhttpRequest
-// @grant        GM_download
-// @grant        unsafeWindow
-// @connect      *
-// ==UserScript==
+// @name          抖音网页版增强下载工具
+// @namespace     https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
+// @version       1.0.8
+// @description   基于开源项目 douyin-dl-user-js 的稳定增强维护版；支持无水印视频、图集批量下载、原声音频提取、弹幕 ASS 导出、作者主页批量任务及断点恢复。
+// @author        小辉同學
+// @match         https://*.douyin.com/*
+// @icon          data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTE1MWMiLz48cGF0aCBkPSJNMTcgMTdoMTFjMTEgMCAxOCA1IDE4IDE1cy03IDE1LTE4IDE1SDE3em0xMCAyM2M3IDAgMTAtMiAxMC04cy0zLTgtMTAtOGgtMnYxNnoiIGZpbGw9IiM4ZmE3ZmYiLz48L3N2Zz4=
+// @license       MIT
+// @require       https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js
+// @run-at        document-idle
+// @noframes
+// @grant         GM_xmlhttpRequest
+// @grant         GM.xmlHttpRequest
+// @grant         GM_download
+// @grant         GM.download
+// @grant         unsafeWindow
+// @connect       *
+// ==/UserScript==
+
+/*
+ * 派生与版权说明
+ *
+ * 本脚本基于 zhzLuke96/douyin-dl-user-js 修改：
+ * https://github.com/zhzLuke96/douyin-dl-user-js
+ *
+ * 原项目许可证：MIT License
+ * Copyright (c) 2024 len
+ *
+ * 主要增强：事件驱动任务中心、Chrome 文件系统流式写入、下载恢复与暂停、
+ * 作者主页批量任务管理、低资源 DOM 观察、中文状态反馈及交互稳定性修复。
+ * 修改部分 Copyright (c) 2026 小辉同學。
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 const requires = this;
 
@@ -29,20 +65,71 @@ const requires = this;
    * NOTE: 虽然都叫 HTML 但是和 htm 里面的不一样
    */
   const html = (strings, ...values) => String.raw(strings, ...values);
-  const css = (strings, ...values) => String.raw(strings, ...values);
+  /**
+   * 安全渲染用户可配置模板。
+   *
+   * 仅支持界面中公开的 `${变量名}` / `${对象.属性}` 占位符，不执行任意
+   * JavaScript。这样既保留原有命名和目录模板，又避免 localStorage 中的模板
+   * 被当作代码执行。
+   *
+   * @param {Record<string, any>} context
+   * @param {string} template
+   * @returns {string}
+   */
+  const renderTemplate = (context, template) => {
+    let source = String(template ?? "").trim();
+    if (source.startsWith("`") && source.endsWith("`") && source.length >= 2) {
+      source = source.slice(1, -1);
+    }
+
+    return source.replace(
+      /\$\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\}/g,
+      (_match, path) => {
+        const value = path.split(".").reduce(
+          (current, key) => (current == null ? undefined : current[key]),
+          context
+        );
+        return value == null ? "" : String(value);
+      }
+    );
+  };
+
+  /** 获取并校验 @require 注入的 Preact 运行时。 */
+  const getHtmPreact = () => {
+    const runtime = requires?.htmPreact;
+    if (!runtime?.html || !runtime?.render) {
+      throw new Error("界面组件加载失败，请检查网络后刷新页面");
+    }
+    return runtime;
+  };
 
   /**
-   * 在context下执行代码
-   *
-   * @type {(context: Record<any,any>, code: string) => any}
+   * 复制文本，Clipboard API 不可用时使用隐藏文本框兜底。
+   * @param {string} value
    */
-  const runInContext = (context, code) => {
-    const keys = Object.keys(context);
-    const head = `const {${keys.join(", ")}} = __CTX__; `;
-    const body = code.trim();
-    const fn = new Function("__CTX__", `${head}\nreturn (${body})`);
-    return fn(context);
-  };
+  async function copyText(value) {
+    const text = String(value ?? "");
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    Object.assign(textarea.style, {
+      position: "fixed",
+      left: "-9999px",
+      opacity: "0",
+    });
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      return document.execCommand("copy");
+    } finally {
+      textarea.remove();
+    }
+  }
   /**
    * 日期格式化函数
    *
@@ -149,6 +236,10 @@ const requires = this;
       this.close(false);
 
       return new Promise((resolve) => {
+        const previouslyFocused =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
         const overlay = document.createElement("div");
         overlay.className = "dy-dl-product-dialog-overlay-v106";
         overlay.innerHTML = `
@@ -189,6 +280,7 @@ const requires = this;
           document.removeEventListener("keydown", onKeyDown, true);
           overlay.remove();
           if (this.active?.overlay === overlay) this.active = null;
+          previouslyFocused?.focus?.();
           resolve(Boolean(value));
         };
         const onKeyDown = (event) => {
@@ -996,7 +1088,6 @@ const requires = this;
     }
   }
   /**
-   * 规范化文件名  /**
    * 规范化文件名，移除非法字符，处理保留名称，限制长度
    * @param {string} name - 原始文件名（不包含路径）
    * @param {Object} [options] - 可选配置
@@ -1019,9 +1110,14 @@ const requires = this;
       extension = name.slice(lastDotIndex);
     }
 
-    // 2. 替换非法字符：Windows 保留字符 + 路径分隔符 + 控制字符
-    const illegalChars = /[\\/:*?"<>|\x00-\x1f\x7f]/g;
-    let cleanBase = baseName.replace(illegalChars, replacementChar);
+    // 2. 替换非法字符：Windows 保留字符 + 路径分隔符 + 控制字符。
+    // 使用字符码判断控制字符，避免静态检查器把正则误判为隐藏控制代码。
+    let cleanBase = Array.from(baseName, (char) => {
+      const code = char.charCodeAt(0);
+      return code <= 31 || code === 127 || /[\\/:*?"<>|]/.test(char)
+        ? replacementChar
+        : char;
+    }).join("");
 
     // 3. 处理 Windows 保留设备名（如 CON, PRN, AUX, NUL, COM1 等）
     const reservedNames = /^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$/i;
@@ -1038,8 +1134,17 @@ const requires = this;
     }
 
     // 6. 合并连续的 replacementChar 为单个（可选，视觉更干净）
-    const multiReplacement = new RegExp(`${replacementChar}{2,}`, "g");
-    cleanBase = cleanBase.replace(multiReplacement, replacementChar);
+    if (replacementChar) {
+      const escapedReplacement = replacementChar.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+      );
+      const multiReplacement = new RegExp(
+        `(?:${escapedReplacement}){2,}`,
+        "g"
+      );
+      cleanBase = cleanBase.replace(multiReplacement, replacementChar);
+    }
 
     // 7. 长度限制（优先保留扩展名）
     const maxBaseLength = maxLength - extension.length;
@@ -1057,23 +1162,64 @@ const requires = this;
 
     return result;
   }
+
   /**
-   * @param {Function} func - The function to debounce.
-   * @param {number} wait - Delay in milliseconds.
+   * 根据真实响应类型判断原声音频扩展名。
+   *
+   * 不能把所有音频强行命名为 MP3：抖音返回的原声可能是 MP3、M4A、
+   * AAC、WebM、Ogg 等格式。类型无法确认时只按 URL 中可信扩展名判断，
+   * 最后才使用兼容性较好的 M4A 作为兜底。
    */
-  function debounce(func, wait) {
-    let timeoutId;
-
-    return function (...args) {
-      // 1. Clear any existing timer
-      clearTimeout(timeoutId);
-
-      // 2. Start a new timer
-      timeoutId = setTimeout(() => {
-        // 3. Execute with original 'this' context and arguments
-        func.apply(this, args);
-      }, wait);
+  function resolveAudioFileMeta(contentType = "", url = "", fallbackExt = "m4a") {
+    const mime = String(contentType || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    const mimeMap = {
+      "audio/mpeg": "mp3",
+      "audio/mp3": "mp3",
+      "audio/mp4": "m4a",
+      "audio/x-m4a": "m4a",
+      "audio/mp4a-latm": "m4a",
+      "video/mp4": "m4a",
+      "audio/aac": "aac",
+      "audio/x-aac": "aac",
+      "audio/aacp": "aac",
+      "audio/vnd.dlna.adts": "aac",
+      "audio/ogg": "ogg",
+      "application/ogg": "ogg",
+      "audio/webm": "webm",
+      "audio/wav": "wav",
+      "audio/x-wav": "wav",
+      "audio/flac": "flac",
+      "audio/x-flac": "flac",
     };
+
+    let urlExt = "";
+    try {
+      urlExt =
+        new URL(url, location.href).pathname
+          .match(/\.([a-z0-9]{2,5})$/i)?.[1]
+          ?.toLowerCase() || "";
+    } catch {}
+
+    const supportedExt = /^(?:mp3|m4a|aac|ogg|opus|webm|wav|flac)$/i;
+    const safeFallback = supportedExt.test(String(fallbackExt || ""))
+      ? String(fallbackExt).toLowerCase()
+      : "m4a";
+    const ext =
+      mimeMap[mime] ||
+      (supportedExt.test(urlExt) ? urlExt : safeFallback);
+    const normalizedMime =
+      mime && (mime.startsWith("audio/") || mime === "video/mp4")
+        ? mime
+        : ext === "mp3"
+        ? "audio/mpeg"
+        : ext === "m4a"
+        ? "audio/mp4"
+        : `audio/${ext}`;
+
+    return { ext, mime: normalizedMime };
   }
   /**
    * @param {Function} func - The function to debounce.
@@ -1277,8 +1423,6 @@ const requires = this;
   };
   // #endregion
 
-  // #region 事件  // #endregion
-
   // #region 事件
   /**
    * @template {Record<string, any[]>} Events
@@ -1374,7 +1518,7 @@ const requires = this;
       /**
        * @type {import('preact/hooks')}
        */
-      const { useState, useRef, useEffect } = requires?.htmPreact;
+      const { useState, useEffect } = getHtmPreact();
       const [state, setState] = useState(getter || (() => null));
       useEffect(() => {
         const off = this.on(event, (...args) => {
@@ -1545,7 +1689,6 @@ const requires = this;
 
         // V1.0.4：旧配置可能没有 browser 节点，做深层默认合并。
         this.features.downloader_config = {
-          browser: { mode: "auto" },
           abdm: this.features.downloader_config?.abdm || {},
           aria2: this.features.downloader_config?.aria2 || {},
           ...(this.features.downloader_config || {}),
@@ -1771,32 +1914,37 @@ const requires = this;
     async process(file) {
       const bitmap = await createImageBitmap(file);
 
-      let { width, height } = bitmap;
+      try {
+        let { width, height } = bitmap;
 
-      if (!this.is_need_convert(width, height)) {
-        return { blob: file };
+        if (!this.is_need_convert(width, height)) {
+          return { blob: file, outputType: file.type || "application/octet-stream" };
+        }
+
+        // 1. resize
+        ({ width, height } = this._resize(width, height));
+
+        const canvas = this._createCanvas(width, height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("浏览器无法创建图片处理画布");
+
+        const outputType = this._getOutputType(file.type);
+
+        // 2. 透明背景处理
+        if (outputType === "image/jpeg") {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, width, height);
+        }
+
+        ctx.drawImage(bitmap, 0, 0, width, height);
+
+        // 3. encode
+        const blob = await this._toBlob(canvas, outputType);
+        return { blob, outputType };
+      } finally {
+        // 批量处理图集时及时释放 GPU/位图内存。
+        bitmap.close?.();
       }
-
-      // 1. resize
-      ({ width, height } = this._resize(width, height));
-
-      const canvas = this._createCanvas(width, height);
-      const ctx = canvas.getContext("2d");
-
-      const outputType = this._getOutputType(file.type);
-
-      // 2. 透明背景处理
-      if (outputType === "image/jpeg") {
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, width, height);
-      }
-
-      ctx.drawImage(bitmap, 0, 0, width, height);
-
-      // 3. encode
-      const blob = await this._toBlob(canvas, outputType);
-
-      return { blob, outputType };
     }
 
     /**
@@ -1873,8 +2021,11 @@ const requires = this;
       }
 
       // HTMLCanvas fallback
-      return new Promise((resolve) => {
-        canvas.toBlob(resolve, type, quality);
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("图片编码失败，浏览器未返回有效文件"));
+        }, type, quality);
       });
     }
   }
@@ -1946,8 +2097,18 @@ const requires = this;
       const urlExt = (urlPath.match(/\.([a-z0-9]{2,5})$/i)?.[1] || "").toLowerCase();
       const fileKind = options.fileKind ||
         (options.media?.images?.length ? "image" : "video");
-      const isImage = fileKind === "image" || /^(?:jpg|jpeg|png|webp|gif|avif)$/i.test(urlExt);
-      const isVideo = fileKind === "video" || /^(?:mp4|mov|m4v|webm)$/i.test(urlExt);
+      const isImage =
+        fileKind === "image" ||
+        (!/^(?:audio|video)$/i.test(fileKind) &&
+          /^(?:jpg|jpeg|png|webp|gif|avif)$/i.test(urlExt));
+      const isAudio =
+        fileKind === "audio" ||
+        (!/^(?:image|video)$/i.test(fileKind) &&
+          /^(?:mp3|m4a|aac|ogg|opus|wav|flac)$/i.test(urlExt));
+      const isVideo =
+        fileKind === "video" ||
+        (!/^(?:audio|image)$/i.test(fileKind) &&
+          /^(?:mp4|mov|m4v|webm)$/i.test(urlExt));
 
       let ext = urlExt;
       let mime = "application/octet-stream";
@@ -1960,6 +2121,14 @@ const requires = this;
         else if (!/^(?:jpg|jpeg|png|webp|gif|avif)$/i.test(ext)) ext = "webp";
 
         mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      } else if (isAudio) {
+        const audioMeta = resolveAudioFileMeta(
+          options.forcedMime || "",
+          url,
+          options.forcedExtension || urlExt || "m4a"
+        );
+        ext = audioMeta.ext;
+        mime = audioMeta.mime;
       } else if (isVideo) {
         if (!/^(?:mp4|mov|m4v|webm)$/i.test(ext)) ext = "mp4";
         mime = ext === "webm" ? "video/webm" : "video/mp4";
@@ -1978,6 +2147,7 @@ const requires = this;
         mime,
         isImage,
         isVideo,
+        isAudio,
       };
     }
 
@@ -2016,11 +2186,15 @@ const requires = this;
           ? (loaded / total) * 100
           : NaN;
 
+        const phase = partial.phase || "downloading";
         const payload = {
           filename: meta.filename,
           method,
-          phase: partial.phase || "downloading",
-          status: partial.status || "正在下载",
+          phase,
+          status:
+            options.progressLabels?.[phase] ||
+            partial.status ||
+            "正在下载",
           loaded,
           total,
           speed,
@@ -2103,18 +2277,30 @@ const requires = this;
       const content_type = headers.get("content-type") || guessed.mime;
       const content_length = headers.get("content-length") || "";
       const imagex_fmt = headers.get("Imagex-Fmt") || "";
-      const isImage = guessed.isImage || !!imagex_fmt || content_type.startsWith("image/");
-      const isVideo = guessed.isVideo || content_type.startsWith("video/");
+      const isImage =
+        guessed.isImage ||
+        (!guessed.isAudio && (!!imagex_fmt || content_type.startsWith("image/")));
+      const isVideo =
+        guessed.isVideo ||
+        (!guessed.isAudio && content_type.startsWith("video/"));
+      const isAudio = guessed.isAudio || content_type.startsWith("audio/");
       const isWebP =
         imagex_fmt.includes("2webp") ||
         dl_url.includes(".webp") ||
         content_type.includes("webp");
 
       let determinedFileExt = guessed.ext;
-      const dispositionMatch = content_disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+      if (isAudio) {
+        determinedFileExt = resolveAudioFileMeta(
+          content_type,
+          dl_url,
+          guessed.ext
+        ).ext;
+      }
+      const dispositionMatch = content_disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
       if (dispositionMatch?.[1]) {
         try {
-          const candidate = decodeURIComponent(dispositionMatch[1].replace(/^\"|\"$/g, ""));
+          const candidate = decodeURIComponent(dispositionMatch[1].replace(/^"|"$/g, ""));
           const ext = candidate.split(".").pop()?.toLowerCase();
           if (ext && /^[a-z0-9]{2,5}$/i.test(ext)) determinedFileExt = ext;
         } catch {}
@@ -2131,6 +2317,7 @@ const requires = this;
         ext: determinedFileExt,
         isImage,
         isVideo,
+        isAudio,
         isWebP,
         headers,
         content_length,
@@ -2197,11 +2384,16 @@ const requires = this;
             /system file|系统文件|sensitive|not allowed|permission/i.test(message);
 
           if (sensitiveDirectory) {
-            const retry = retrySensitiveDirectory && window.confirm(
-              "Chrome 不允许网页直接写入桌面根目录或其它敏感系统目录。\n\n" +
-              "建议先在桌面新建一个普通子文件夹，例如“抖音下载”，然后选择该文件夹。\n\n" +
-              "点击“确定”重新选择文件夹；点击“取消”则改用浏览器默认下载目录。"
-            );
+            const retry =
+              retrySensitiveDirectory &&
+              (await ProductDialog.open({
+                icon: "warning",
+                title: "这个目录不能直接写入",
+                message: "Chrome 不允许网页写入桌面根目录或其它敏感系统目录。",
+                detail: "请先在桌面新建一个普通子文件夹（例如“抖音下载”），再重新选择；也可以改用浏览器默认下载目录。",
+                primaryLabel: "重新选择目录",
+                secondaryLabel: "使用默认目录",
+              }));
             retrySensitiveDirectory = false;
             if (retry) continue;
 
@@ -2381,6 +2573,8 @@ const requires = this;
                     ? "视频文件"
                     : meta.isImage
                     ? "图片文件"
+                    : meta.isAudio
+                    ? "音频文件"
                     : "文件",
                   accept: {
                     [meta.mime]: [`.${meta.ext}`],
@@ -3116,6 +3310,8 @@ const requires = this;
         const link = document.createElement("a");
         link.href = url;
         link.download = meta.filename;
+        // 跨域地址可能忽略 download 属性；新标签页可避免下载失败时把抖音页面顶走。
+        link.target = "_blank";
         link.rel = "noopener noreferrer";
         link.style.display = "none";
         document.body.appendChild(link);
@@ -3198,8 +3394,10 @@ const requires = this;
       // 一次 download_file 的多个备用 URL 共用同一下载实现和同一文件句柄。
       const selected = options.__browserMethod;
       const methods = selected ? [selected] : order;
+      let lastFailure = null;
 
-      for (const method of methods) {
+      for (let index = 0; index < methods.length; index++) {
+        const method = methods[index];
         if (method === "file_system" && options.batch && !options.browserContext?.directoryHandle) {
           continue;
         }
@@ -3215,14 +3413,29 @@ const requires = this;
           options.__browserMethod = method;
           return result;
         }
+        lastFailure = result;
         if (result.retrySource) {
+          const hasPartialFile = Boolean(
+            Number(result.loaded || 0) > 0 ||
+            result.resumeAvailable ||
+            Number(options.__resumeState?.offset || 0) > 0
+          );
+
+          // 已经写入部分文件时必须留在当前实现中恢复，避免产生重复文件。
+          if (hasPartialFile) {
+            options.__browserMethod = method;
+            return result;
+          }
+
+          // 连接尚未写入数据时，继续尝试 GM_download / 原生下载 / Blob。
+          if (index < methods.length - 1) continue;
           options.__browserMethod = method;
           return result;
         }
         if (!result.unavailable) return result;
       }
 
-      return { ok: false, reason: "no_browser_download_method" };
+      return lastFailure || { ok: false, reason: "no_browser_download_method" };
     }
 
     async download_one_url(url, filename_input, options = {}) {
@@ -3682,12 +3895,16 @@ const requires = this;
         !options.silent &&
         !lastResult.cancelled
       ) {
-        alert(
-          `[dy-dl]${
+        void ProductDialog.open({
+          icon: "warning",
+          title: "下载未完成",
+          message:
             lastResult.message ||
-            "所有尝试下载都失败，请稍后重新下载。"
-          }`
-        );
+            "所有下载方式均未成功。",
+          detail: "您可以检查网络和登录状态后，在任务中心点击“重新下载”。",
+          primaryLabel: "我知道了",
+          hideSecondary: true,
+        });
       }
 
       return lastResult;
@@ -3713,6 +3930,10 @@ const requires = this;
      */
     constructor(callback) {
       this.closed = false;
+      this.previouslyFocused =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
 
       this.overlay = document.createElement("div");
       this.overlay.className = "dy-dl-modal-overlay-v1";
@@ -3720,6 +3941,8 @@ const requires = this;
       // frame 负责定位关闭按钮，root 继续给业务组件直接 render。
       this.frame = document.createElement("div");
       this.frame.className = "dy-dl-modal-frame-v101";
+      this.frame.setAttribute("role", "dialog");
+      this.frame.setAttribute("aria-modal", "true");
 
       this.root = document.createElement("div");
       this.root.className = "dy-dl-modal-root-v1";
@@ -3763,6 +3986,8 @@ const requires = this;
       if (typeof callback === "function") {
         callback(this.root, this.overlay);
       }
+
+      this.closeButton.focus();
     }
 
     close() {
@@ -3773,7 +3998,7 @@ const requires = this;
 
       // 如果 root 内由 Preact 挂载，关闭时主动卸载。
       try {
-        const render = requires?.htmPreact?.render;
+        const render = getHtmPreact().render;
         if (typeof render === "function") {
           render(null, this.root);
         }
@@ -3782,6 +4007,7 @@ const requires = this;
       }
 
       this.overlay?.remove();
+      this.previouslyFocused?.focus?.();
     }
   }
   // #endregion
@@ -3794,21 +4020,26 @@ const requires = this;
    * =====================================================================
    * 【用户可自行修改的信息区域】
    *
-   * 以后如果你想修改作者、联系邮箱、免责声明、反馈说明，
+   * 以后如果你想修改维护者、项目仓库、交流群、免责声明、反馈说明，
    * 只需要搜索：ABOUT_PANEL_CONTENT
    * 然后修改下面这些中文字符串即可，不需要查其它代码。
    * =====================================================================
    */
   const ABOUT_PANEL_CONTENT = Object.freeze({
     title: "抖音下载 · 关于 / 需求反馈",
-    subtitle: "Native Media · GPU Safe Edition",
-    version: "V1.0.7",
+    subtitle: "稳定增强维护版",
+    version: "V1.0.8",
 
-    // ---- 作者信息：以后需要修改作者名称，就改这里 ----
-    author: "小辉同學 与 ChatGPT",
+    // ---- 项目与联系信息 ----
+    maintainer: "小辉同學",
+    projectName: "xiaohuitongxue88-ctrl/douyin-downloader",
+    projectUrl: "https://github.com/xiaohuitongxue88-ctrl/douyin-downloader",
+    groupUrl:
+      "https://qm.qq.com/cgi-bin/qm/qr?k=CBGX0IIrsC_zYKVZj8VC5h8oTHi3RFIl&jump_from=webapi&authKey=yQui9pH2urgUtzrPje4pxQQci5C6Vlfe/socd6ELHzeKfII4G+VQs65rqNYLblFU",
 
-    // ---- 联系邮箱：以后需要换邮箱，就改这里 ----
-    email: "",
+    // ---- MIT 来源说明：界面低调展示，源码内保留完整版权与许可 ----
+    upstreamName: "douyin-dl-user-js",
+    upstreamUrl: "https://github.com/zhzLuke96/douyin-dl-user-js",
 
     // ---- 免费分享说明 ----
     shareNote:
@@ -3816,11 +4047,11 @@ const requires = this;
 
     // ---- 免责声明：以后需要调整免责声明，就改这里 ----
     disclaimer:
-      "本脚本仅供个人学习、技术研究及合法的个人内容备份使用。请使用者自行遵守所在地法律法规、抖音平台规则及相关内容版权要求。严禁将本脚本用于侵权、违法用途，严禁倒卖、付费转售或恶意修改后冒充原作者进行收费传播。因使用者不当使用本脚本而产生的账号、版权、网络、数据或其它风险与后果，由使用者自行承担。",
+      "本脚本仅供个人学习、技术研究及合法的个人内容备份使用。请使用者自行遵守所在地法律法规、抖音平台规则及相关内容版权要求。严禁将本脚本用于侵权、违法用途，严禁倒卖、付费转售或恶意修改后冒充他人或项目官方进行收费传播。因使用者不当使用本脚本而产生的账号、版权、网络、数据或其它风险与后果，由使用者自行承担。",
 
     // ---- 反馈建议 ----
     feedback:
-      "如需反馈 Bug 或提出功能建议，建议邮件主题注明【抖音下载反馈】，并附上：脚本版本、页面类型、复现步骤、浏览器版本、截图及必要的控制台报错。",
+      "如需反馈 Bug 或提出功能建议，请在脚本发布页的反馈区说明：脚本版本、页面类型、复现步骤、浏览器版本、截图及必要的控制台报错。",
 
     // ---- 隐私提醒 ----
     privacy:
@@ -3829,6 +4060,7 @@ const requires = this;
     // ---- 功能摘要：可自行增删 ----
     features: [
       "视频 / 图集 / 图片下载",
+      "提取并下载作品原声音频",
       "媒体详情与多清晰度资源查看",
       "弹幕导出为 ASS",
       "作者主页批量选择与下载",
@@ -3845,40 +4077,6 @@ const requires = this;
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
-    },
-
-    async copyEmail(button) {
-      const email = ABOUT_PANEL_CONTENT.email;
-
-      try {
-        await navigator.clipboard.writeText(email);
-        button.textContent = "已复制";
-        createToast(null, "联系邮箱已复制");
-
-        setTimeout(() => {
-          if (button?.isConnected) {
-            button.textContent = "复制邮箱";
-          }
-        }, 1400);
-      } catch {
-        // Clipboard API 不可用时使用 textarea 兜底。
-        const textarea = document.createElement("textarea");
-        textarea.value = email;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-
-        try {
-          document.execCommand("copy");
-          button.textContent = "已复制";
-          createToast(null, "联系邮箱已复制");
-        } catch {
-          alert(`联系邮箱：${email}`);
-        } finally {
-          textarea.remove();
-        }
-      }
     },
 
     open() {
@@ -3919,21 +4117,40 @@ const requires = this;
             <span class="dy-dl-about-free">免费无偿分享</span>
           </header>
 
-          <section class="dy-dl-about-grid">
-            <div class="dy-dl-about-card">
-              <div class="dy-dl-about-card-label">作者</div>
-              <div class="dy-dl-about-card-value">${this.escapeHtml(
-                info.author
+          <section class="dy-dl-about-project-card">
+            <div class="dy-dl-about-info-row">
+              <div class="dy-dl-about-info-label">维护者</div>
+              <div class="dy-dl-about-info-value">${this.escapeHtml(
+                info.maintainer
               )}</div>
             </div>
 
-<div class="dy-dl-about-card">
-              <div class="dy-dl-about-card-label">交流群</div>
-              <div class="dy-dl-about-email-row">
-                <a target="_blank" href="https://qm.qq.com/cgi-bin/qm/qr?k=CBGX0IIrsC_zYKVZj8VC5h8oTHi3RFIl&jump_from=webapi&authKey=yQui9pH2urgUtzrPje4pxQQci5C6Vlfe/socd6ELHzeKfII4G+VQs65rqNYLblFU"><img border="0" src="//pub.idqqimg.com/wpa/images/group.png" alt="人生自古誰无死" title="人生自古誰无死"></a>
+            <div class="dy-dl-about-info-row">
+              <div class="dy-dl-about-info-label">项目仓库</div>
+              <div class="dy-dl-about-info-value">
+                <a target="_blank" rel="noopener noreferrer" href="${this.escapeHtml(
+                  info.projectUrl
+                )}">${this.escapeHtml(info.projectName)}</a>
+              </div>
+            </div>
+
+            <div class="dy-dl-about-info-row">
+              <div class="dy-dl-about-info-label">交流群</div>
+              <div class="dy-dl-about-info-value">
+                <a class="dy-dl-about-group-link" target="_blank" rel="noopener noreferrer" href="${this.escapeHtml(
+                  info.groupUrl
+                )}">加入 QQ 交流群</a>
               </div>
             </div>
           </section>
+
+          <div class="dy-dl-about-attribution">
+            基于
+            <a target="_blank" rel="noopener noreferrer" href="${this.escapeHtml(
+              info.upstreamUrl
+            )}">${this.escapeHtml(info.upstreamName)}</a>
+            （MIT 许可）改进
+          </div>
 
           <section class="dy-dl-about-section">
             <div class="dy-dl-about-section-title">主要功能</div>
@@ -3967,13 +4184,6 @@ const requires = this;
           </footer>
         </div>
       `;
-
-      const copyButton = modal.root.querySelector(".dy-dl-about-copy-email");
-      copyButton?.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        this.copyEmail(copyButton);
-      });
 
       return modal;
     },
@@ -4043,12 +4253,8 @@ const requires = this;
         return raw;
       }
 
-      const templateCode = raw.startsWith("`")
-        ? raw
-        : `\`${raw.replace(/\\/g, "\\\\").replace(/`/g, "\\`")}\``;
-
       try {
-        const resolved = runInContext(context, templateCode);
+        const resolved = renderTemplate(context, raw);
         return typeof resolved === "string" && resolved.trim()
           ? resolved
           : fallback;
@@ -4100,7 +4306,7 @@ const requires = this;
         );
       }
 
-      const { filename, isVideo, isImage } = prepared;
+      const { filename, isVideo, isImage, isAudio } = prepared;
       const authorInfo = media?.authorInfo || {};
       const userId =
         authorInfo.uid || media?.authorUserId || authorInfo.secUid || "unknown";
@@ -4111,6 +4317,8 @@ const requires = this;
         ? `./douyin/${user_dir}/videos`
         : isImage
         ? `./douyin/${user_dir}/images`
+        : isAudio
+        ? `./douyin/${user_dir}/audio`
         : `./douyin/${user_dir}/others`;
       const dirContext = {
         media,
@@ -4337,7 +4545,7 @@ const requires = this;
       const headerArgs = Object.entries(headers)
         .map(([k, v]) => `-H "${k}: ${v}"`)
         .join(" ");
-      const safeFilename = filename.replace(/[!?&|`"'*\/:<>\\]/g, "_");
+      const safeFilename = filename.replace(/[!?&|`"'*/:<>\\]/g, "_");
       return `${curlCmd} -L -C - "${link}" -o "${safeFilename}" ${headerArgs}`.trim();
     }
 
@@ -4349,7 +4557,7 @@ const requires = this;
      * @returns {string}
      */
     static toBitCometLink(link, filename, headers = {}) {
-      const safeFilename = filename.replace(/[!?&|`"'*\/:<>\\]/g, "_");
+      const safeFilename = filename.replace(/[!?&|`"'*/:<>\\]/g, "_");
       const query = new URLSearchParams();
       query.append("url", link);
       for (const [k, v] of Object.entries(headers)) {
@@ -4517,7 +4725,9 @@ const requires = this;
           }
 
           emit({ phase: "downloading", status: status?.status === "paused" ? "aria2 已暂停" : "aria2 正在下载", loaded, total, speed, eta, percent });
-          await new Promise((resolve) => setTimeout(resolve, 900));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 900);
+          });
         }
 
         return { ok: false, cancelled: true, method: "aria2", gid, reason: "cancelled" };
@@ -4530,7 +4740,6 @@ const requires = this;
       }
     }
 
-    /**
     /**
      * 发送到比特彗星 (BitComet)
      * @param {string} link
@@ -4567,9 +4776,9 @@ const requires = this;
         // 比特彗星成功时返回空或特定字符串；失败包含 "Add task failed!"
         return !res.data.includes("Add task failed!");
       } catch (e) {
-        // 某些版本即使成功也会报网络错误，这里视为成功（实际需根据经验调整）
-        console.warn("BitComet launch may have succeeded despite error", e);
-        return true;
+        // 网络错误无法证明任务已创建，不能把未知状态伪报为成功。
+        console.error("BitComet launch failed", e);
+        return false;
       }
     }
 
@@ -4626,7 +4835,7 @@ const requires = this;
       const headerArgs = Object.entries(headers)
         .map(([k, v]) => `--header "${k}: ${v}"`)
         .join(" ");
-      const safeFilename = filename.replace(/[!?&|`"'*\/:<>\\]/g, "_");
+      const safeFilename = filename.replace(/[!?&|`"'*/:<>\\]/g, "_");
       return `aria2c "${link}" --out "${safeFilename}" ${headerArgs}`.trim();
     }
   }
@@ -4640,12 +4849,10 @@ const requires = this;
     /**
      * @type {import('preact/hooks')}
      */
-    const { useState, useRef, useEffect } = requires?.htmPreact;
+    const { useState, useRef, useEffect, html } = getHtmPreact();
     /**
      * @type {import('preact').h}
      */
-    const html = requires?.htmPreact?.html;
-
     // --- 初始化 CSS-in-JS 工具 ---
     const css = createCSS();
 
@@ -4985,9 +5192,9 @@ const requires = this;
         key: "copy",
         label: "复制",
         buildUrl: () => null,
-        action: (url) => {
-          navigator.clipboard.writeText(url);
-          alert("复制成功");
+        action: async (url) => {
+          const ok = await copyText(url);
+          ToastCenter.update(ok ? "链接已复制" : "复制失败，请手动复制", 1800);
         },
       },
       {
@@ -4999,7 +5206,7 @@ const requires = this;
         key: "abdm",
         label: "abdm",
         buildUrl: () => null,
-        action: async (url, {}) => {
+        action: async (url) => {
           const launcher = new DownloaderLauncher();
           await launcher.invoke_download(url, "abdm");
         },
@@ -5166,7 +5373,7 @@ const requires = this;
         const dl_url = music.playUrl?.urlList?.[0] || "";
         return html`
           <fieldset className=${styles.fieldset}>
-            <legend className=${styles.legend}>背景音乐</legend>
+            <legend className=${styles.legend}>作品原声</legend>
             <div className=${styles.flexRow}>
               <img
                 src=${music.coverThumb?.urlList?.[0]}
@@ -5179,9 +5386,13 @@ const requires = this;
                 <${KeyValue} label="时长">${music.duration} 秒</${KeyValue}>
                 ${
                   dl_url &&
-                  html`<a href=${dl_url} target="_blank" className=${styles.btn}
-                    >下载</a
-                  >`
+                  html`<button
+                    type="button"
+                    className=${styles.btn}
+                    onClick=${() => mediaHandler.extract_original_audio()}
+                  >
+                    下载原声音频
+                  </button>`
                 }
                 ${
                   dl_url &&
@@ -5204,13 +5415,35 @@ const requires = this;
       `;
     };
 
+    const AUTHOR_FOLLOWER_KEYS = Object.freeze([
+      "followerCount",
+      "follower_count",
+      "fansCount",
+      "fans_count",
+      "mplatformFollowersCount",
+      "mplatform_followers_count",
+      "followerNum",
+      "follower_num",
+    ]);
+    const AUTHOR_FAVORITE_KEYS = Object.freeze([
+      "totalFavorited",
+      "total_favorited",
+      "totalFavoritedCount",
+      "total_favorited_count",
+      "favoritedCount",
+      "favorited_count",
+      "likedCount",
+      "liked_count",
+      "likeCount",
+      "like_count",
+    ]);
+
     /**
      * 作者统计字段兼容读取。
      *
      * 抖音 Web 不同页面/播放器版本的 authorInfo 字段并不完全一致：
      * 有的使用 camelCase，有的使用 snake_case，还有的把统计放在
-     * author.stats / author.statistics 中。因此这里做有限、多字段兼容，
-     * 避免粉丝数、获赞数明明存在却显示“-”。
+     * author.stats / author.statistics 中。因此这里做有限、多字段兼容。
      */
     const readAuthorNumber = (author, media, keys) => {
       const sources = [
@@ -5244,32 +5477,286 @@ const requires = this;
       return null;
     };
 
+    // 作者主页统计按 SecUID 缓存 10 分钟，避免反复开关详情页造成重复请求。
+    const authorProfileCache = new Map();
+    const AUTHOR_PROFILE_CACHE_TTL = 10 * 60 * 1000;
+
+    /**
+     * 从接口或页面预载 JSON 中寻找作者统计对象。
+     * 只做有深度和节点上限的遍历，避免处理异常大对象时占用过多资源。
+     */
+    const selectAuthorProfile = (payload, secUid) => {
+      if (!payload || typeof payload !== "object") return null;
+
+      const expectedId = String(secUid || "");
+      const queue = [{ value: payload, depth: 0 }];
+      const seen = new Set();
+      let cursor = 0;
+      let visited = 0;
+      let best = null;
+      let bestScore = -1;
+
+      while (cursor < queue.length && visited < 2500) {
+        const { value, depth } = queue[cursor++];
+        if (!value || typeof value !== "object" || seen.has(value)) continue;
+        seen.add(value);
+        visited++;
+
+        const followerCount = readAuthorNumber(value, null, AUTHOR_FOLLOWER_KEYS);
+        const totalFavorited = readAuthorNumber(value, null, [
+          "totalFavorited",
+          "total_favorited",
+          "totalFavoritedCount",
+          "total_favorited_count",
+          "favoritedCount",
+          "favorited_count",
+        ]);
+        const candidateId = String(
+          value.secUid ||
+            value.sec_uid ||
+            value.secUserId ||
+            value.sec_user_id ||
+            ""
+        );
+
+        if (followerCount != null || totalFavorited != null) {
+          let score = followerCount != null && totalFavorited != null ? 12 : 5;
+          if (expectedId && candidateId === expectedId) score += 30;
+          if (value.nickname || value.nickName || value.uid) score += 3;
+          if (score > bestScore) {
+            bestScore = score;
+            best = {
+              ...value,
+              followerCount,
+              totalFavorited,
+            };
+          }
+        }
+
+        if (depth >= 8) continue;
+        const priorityKeys = [
+          "user",
+          "userInfo",
+          "user_info",
+          "author",
+          "authorInfo",
+          "author_info",
+          "stats",
+          "statistics",
+          "data",
+        ];
+        const pushed = new Set();
+        for (const key of priorityKeys) {
+          const child = value[key];
+          if (child && typeof child === "object") {
+            queue.push({ value: child, depth: depth + 1 });
+            pushed.add(child);
+          }
+        }
+        for (const child of Array.isArray(value) ? value : Object.values(value)) {
+          if (child && typeof child === "object" && !pushed.has(child)) {
+            queue.push({ value: child, depth: depth + 1 });
+          }
+        }
+      }
+
+      return best;
+    };
+
+    const fetchAuthorResource = async (url, type, outerSignal) => {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      outerSignal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(() => controller.abort(), 8000);
+
+      try {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: {
+            Accept: type === "json" ? "application/json" : "text/html",
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await (type === "json" ? response.json() : response.text());
+      } finally {
+        clearTimeout(timer);
+        outerSignal?.removeEventListener("abort", abort);
+      }
+    };
+
+    /**
+     * 按需补取作者主页统计。
+     *
+     * 第一通道读取同源作者资料接口；若接口因页面版本或风控不可用，再从作者
+     * 主页预载 JSON 中读取。两条通道均失败时只在作者信息页显示原因，不弹窗。
+     */
+    const loadAuthorProfile = async (secUid, signal) => {
+      const key = String(secUid || "").trim();
+      if (!key) throw new Error("缺少作者标识");
+
+      const cached = authorProfileCache.get(key);
+      if (cached && Date.now() - cached.savedAt < AUTHOR_PROFILE_CACHE_TTL) {
+        return cached.data;
+      }
+
+      let lastError = null;
+      try {
+        const apiUrl = new URL("/aweme/v1/web/user/profile/other/", location.origin);
+        apiUrl.search = new URLSearchParams({
+          device_platform: "webapp",
+          aid: "6383",
+          channel: "channel_pc_web",
+          publish_video_strategy_type: "2",
+          source: "channel_pc_web",
+          personal_center_strategy: "1",
+          sec_user_id: key,
+        }).toString();
+        const payload = await fetchAuthorResource(apiUrl.href, "json", signal);
+        const profile = selectAuthorProfile(payload, key);
+        if (profile) {
+          authorProfileCache.set(key, { data: profile, savedAt: Date.now() });
+          return profile;
+        }
+        lastError = new Error("作者接口未返回统计数据");
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        lastError = error;
+      }
+
+      try {
+        const pageUrl = new URL(`/user/${encodeURIComponent(key)}`, location.origin);
+        const pageText = await fetchAuthorResource(pageUrl.href, "text", signal);
+        const page = new DOMParser().parseFromString(pageText, "text/html");
+        const scripts = [
+          page.querySelector("#__UNIVERSAL_DATA_FOR_REHYDRATION__")?.textContent,
+          page.querySelector("#RENDER_DATA")?.textContent,
+          ...Array.from(page.querySelectorAll('script[type="application/json"]'))
+            .slice(0, 8)
+            .map((script) => script.textContent),
+        ].filter(Boolean);
+
+        for (const raw of scripts) {
+          const variants = [raw];
+          try {
+            const decoded = decodeURIComponent(raw);
+            if (decoded !== raw) variants.push(decoded);
+          } catch {}
+
+          for (const candidateText of variants) {
+            try {
+              const payload = JSON.parse(candidateText);
+              const profile = selectAuthorProfile(payload, key);
+              if (profile) {
+                authorProfileCache.set(key, {
+                  data: profile,
+                  savedAt: Date.now(),
+                });
+                return profile;
+              }
+            } catch {}
+          }
+        }
+        lastError = new Error("作者主页未包含可读取的统计数据");
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        lastError = error;
+      }
+
+      throw lastError || new Error("作者统计暂时不可用");
+    };
+
     const AuthorTab = ({ author, media }) => {
+      const [profileState, setProfileState] = useState({
+        secUid: "",
+        status: "idle",
+        data: null,
+        message: "",
+      });
+      const [retryToken, setRetryToken] = useState(0);
+      const secUid = String(
+        author?.secUid ||
+          author?.sec_uid ||
+          media?.authorInfo?.secUid ||
+          media?.authorInfo?.sec_uid ||
+          ""
+      );
+      const baseFollowerCount = readAuthorNumber(
+        author,
+        media,
+        AUTHOR_FOLLOWER_KEYS
+      );
+      const baseTotalFavorited = readAuthorNumber(
+        author,
+        media,
+        AUTHOR_FAVORITE_KEYS
+      );
+
+      useEffect(() => {
+        if (
+          !author ||
+          !secUid ||
+          (baseFollowerCount != null && baseTotalFavorited != null)
+        ) {
+          return undefined;
+        }
+
+        const controller = new AbortController();
+        let active = true;
+        setProfileState({
+          secUid,
+          status: "loading",
+          data: null,
+          message: "",
+        });
+
+        loadAuthorProfile(secUid, controller.signal)
+          .then((data) => {
+            if (!active) return;
+            setProfileState({
+              secUid,
+              status: "ready",
+              data,
+              message: "",
+            });
+          })
+          .catch((error) => {
+            if (!active || error?.name === "AbortError") return;
+            setProfileState({
+              secUid,
+              status: "failed",
+              data: null,
+              message: error?.message || "作者统计暂时不可用",
+            });
+          });
+
+        return () => {
+          active = false;
+          controller.abort();
+        };
+      }, [
+        secUid,
+        baseFollowerCount,
+        baseTotalFavorited,
+        retryToken,
+      ]);
+
       if (!author) return html`<div>无作者信息</div>`;
 
-      const followerCount = readAuthorNumber(author, media, [
-        "followerCount",
-        "follower_count",
-        "fansCount",
-        "fans_count",
-        "mplatformFollowersCount",
-        "mplatform_followers_count",
-        "followerNum",
-        "follower_num",
-      ]);
-
-      const totalFavorited = readAuthorNumber(author, media, [
-        "totalFavorited",
-        "total_favorited",
-        "totalFavoritedCount",
-        "total_favorited_count",
-        "favoritedCount",
-        "favorited_count",
-        "likedCount",
-        "liked_count",
-        "likeCount",
-        "like_count",
-      ]);
+      const fetchedProfile =
+        profileState.secUid === secUid ? profileState.data : null;
+      const followerCount =
+        baseFollowerCount ??
+        readAuthorNumber(fetchedProfile, null, AUTHOR_FOLLOWER_KEYS);
+      const totalFavorited =
+        baseTotalFavorited ??
+        readAuthorNumber(fetchedProfile, null, AUTHOR_FAVORITE_KEYS);
+      const needsRemoteStats =
+        followerCount == null || totalFavorited == null;
+      const retryProfile = () => {
+        if (secUid) authorProfileCache.delete(secUid);
+        setRetryToken((value) => value + 1);
+      };
 
       return html`
         <div className=${styles.authorHeader}>
@@ -5308,6 +5795,48 @@ const requires = this;
         <${KeyValue} label="获赞数">
           ${totalFavorited == null ? "-" : fmt.num(totalFavorited)}
         </${KeyValue}>
+        ${
+          needsRemoteStats && !secUid
+            ? html`<div className="dy-dl-author-stat-status" data-state="failed">
+                当前作品未带作者主页标识，无法补取统计
+              </div>`
+            : null
+        }
+        ${
+          needsRemoteStats && profileState.status === "loading"
+            ? html`<div className="dy-dl-author-stat-status" data-state="loading">
+                正在获取作者主页统计…
+              </div>`
+            : null
+        }
+        ${
+          needsRemoteStats && profileState.status === "failed"
+            ? html`<div className="dy-dl-author-stat-status" data-state="failed">
+                <span>主页统计暂时无法读取</span>
+                <button
+                  type="button"
+                  className="dy-dl-author-stat-retry"
+                  onClick=${retryProfile}
+                >
+                  重试
+                </button>
+              </div>`
+            : null
+        }
+        ${
+          needsRemoteStats && profileState.status === "ready"
+            ? html`<div className="dy-dl-author-stat-status" data-state="failed">
+                <span>作者主页仅返回了部分统计</span>
+                <button
+                  type="button"
+                  className="dy-dl-author-stat-retry"
+                  onClick=${retryProfile}
+                >
+                  重新获取
+                </button>
+              </div>`
+            : null
+        }
       `;
     };
 
@@ -5381,7 +5910,7 @@ const requires = this;
             原始数据
             <button onClick=${selectAll} className=${styles.btn}>全选</button>
             <button onClick=${() => console.log(data)} className=${styles.btn}>
-              Console Log
+              输出到控制台
             </button>
           </legend>
           <pre className=${styles.jsonPre}>
@@ -5424,25 +5953,28 @@ const requires = this;
         }
       };
 
-      const copySingleText = (text) => {
-        navigator.clipboard.writeText(text);
-        alert("已复制弹幕文本");
+      const copySingleText = async (text) => {
+        const ok = await copyText(text);
+        ToastCenter.update(ok ? "弹幕文本已复制" : "复制失败，请重试", 1800);
       };
 
-      const copyAllText = () => {
+      const copyAllText = async () => {
         const allText = danmakuList.map((item) => item.text).join("\n");
-        navigator.clipboard.writeText(allText);
-        alert(`已复制 ${danmakuList.length} 条弹幕文本`);
+        const ok = await copyText(allText);
+        ToastCenter.update(
+          ok ? `已复制 ${danmakuList.length} 条弹幕文本` : "复制失败，请重试",
+          2000
+        );
       };
 
-      const copyAllJSON = () => {
+      const copyAllJSON = async () => {
         const jsonStr = JSON.stringify(
           danmakuList.map((item) => item.raw),
           null,
           2
         );
-        navigator.clipboard.writeText(jsonStr);
-        alert("已复制弹幕 JSON 数据");
+        const ok = await copyText(jsonStr);
+        ToastCenter.update(ok ? "弹幕 JSON 数据已复制" : "复制失败，请重试", 1800);
       };
 
       useEffect(() => {
@@ -5592,12 +6124,10 @@ const requires = this;
     /**
      * @type {import('preact/hooks')}
      */
-    const { useState, useRef, useEffect, useMemo } = requires?.htmPreact;
+    const { useState, useEffect, useMemo, html } = getHtmPreact();
     /**
      * @type {import('preact').h}
      */
-    const html = requires?.htmPreact?.html;
-
     const cssFn = createCSS();
 
     const classNames = {
@@ -6239,26 +6769,36 @@ const requires = this;
           },
         };
         config.save();
-        alert("下载器配置已保存");
+        ToastCenter.update("下载器配置已保存", 1800);
         if (onConfigChange) onConfigChange();
       };
 
       // 重置为默认值
-      const handleReset = () => {
-        if (confirm("重置所有下载器配置到默认值？")) {
-          setAbdmDomain("http://localhost");
-          setAbdmPort("15151");
-          setAbdmDirVideo("`./douyin/${user_dir}/videos`");
-          setAbdmDirImage("`./douyin/${user_dir}/images`");
-          setAbdmDirOther("`./douyin/${user_dir}/others`");
-          setAria2Domain("http://localhost");
-          setAria2Port("6800");
-          setAria2Path("/jsonrpc");
-          setAria2Token("");
-          setAria2DirVideo("`./douyin/${user_dir}/videos`");
-          setAria2DirImage("`./douyin/${user_dir}/images`");
-          setAria2DirOther("`./douyin/${user_dir}/others`");
-        }
+      const handleReset = async () => {
+        const ok = await ProductDialog.open({
+          icon: "warning",
+          title: "重置下载器配置？",
+          message: "AB Download Manager 和 aria2 的地址、端口、目录及 Token 将恢复默认值。",
+          detail: "此次操作只修改当前表单；请再点击“保存设置”才会正式生效。",
+          primaryLabel: "恢复默认值",
+          secondaryLabel: "取消",
+          danger: true,
+        });
+        if (!ok) return;
+
+        setAbdmDomain("http://localhost");
+        setAbdmPort("15151");
+        setAbdmDirVideo("`./douyin/${user_dir}/videos`");
+        setAbdmDirImage("`./douyin/${user_dir}/images`");
+        setAbdmDirOther("`./douyin/${user_dir}/others`");
+        setAria2Domain("http://localhost");
+        setAria2Port("6800");
+        setAria2Path("/jsonrpc");
+        setAria2Token("");
+        setAria2DirVideo("`./douyin/${user_dir}/videos`");
+        setAria2DirImage("`./douyin/${user_dir}/images`");
+        setAria2DirOther("`./douyin/${user_dir}/others`");
+        ToastCenter.update("已恢复默认值，请点击“保存设置”生效", 2200);
       };
 
       return html`
@@ -6407,8 +6947,7 @@ const requires = this;
 
   // #region Floating Action Panel
   const FloatingPanelComponents = (() => {
-    const { useCallback } = requires?.htmPreact;
-    const html = requires?.htmPreact?.html;
+    const { useCallback, html } = getHtmPreact();
     const css = createCSS();
     const icon = (name) => html`<span class="dy-dl-inline-icon-v106" dangerouslySetInnerHTML=${{ __html: UI_ICONS[name] || "" }}></span>`;
 
@@ -6559,12 +7098,11 @@ const requires = this;
 
     mount() {
       if (this.mounted) return;
-      this.mounted = true;
 
       /**
        * @type {import('preact')}
        */
-      const { html, render } = requires.htmPreact;
+      const { html, render } = getHtmPreact();
       const { App } = FloatingPanelComponents;
       render(
         html`<${App}
@@ -6574,6 +7112,7 @@ const requires = this;
         this.root
       );
 
+      this.mounted = true;
       this.syncVisibility();
     }
 
@@ -6583,7 +7122,7 @@ const requires = this;
       /**
        * @type {import('preact')}
        */
-      const { render } = requires.htmPreact;
+      const { render } = getHtmPreact();
       render(null, this.root);
     }
 
@@ -6598,9 +7137,14 @@ const requires = this;
     }
 
     syncVisibility() {
-      if (!this.mounted) return;
+      const onProfilePage = isProfilePagePath();
+      if (!this.mounted) {
+        if (onProfilePage) this.mount();
+        return;
+      }
 
-      const shouldHide = Boolean(document.querySelector("#sliderVideo"));
+      const shouldHide =
+        !onProfilePage || Boolean(document.querySelector("#sliderVideo"));
       if (this.lastHidden === shouldHide) return;
 
       this.lastHidden = shouldHide;
@@ -6634,6 +7178,9 @@ const requires = this;
       this.download_current_media = this._lock_download(
         this._download_current_media_logic.bind(this)
       );
+      this.extract_original_audio = this._lock_download(
+        this._extract_original_audio_logic.bind(this)
+      );
     }
 
     /**
@@ -6662,12 +7209,15 @@ const requires = this;
       filename_max_length = Config.global.features.filename_max_length || 64,
       throw_err = false
     ) {
+      if (!media) return "douyin_media";
+
       const {
-        authorInfo: { nickname },
-        awemeId,
-        desc,
-        textExtra,
+        authorInfo = {},
+        awemeId = "media",
+        desc = "",
+        textExtra = [],
       } = media;
+      const nickname = authorInfo.nickname || "douyin";
 
       const short_id = MediaHandler.toShortId(awemeId);
       const tag_list =
@@ -6675,9 +7225,10 @@ const requires = this;
       const tags = tag_list.map((x) => "#" + x).join("_");
       let rawDesc = desc || "";
       tag_list.forEach((t) => {
-        rawDesc = rawDesc.replace(new RegExp(`#${t}\\s*`, "g"), "");
+        const safeTag = String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        rawDesc = rawDesc.replace(new RegExp(`#${safeTag}\\s*`, "g"), "");
       });
-      rawDesc = rawDesc.trim().replace(/[#/\?<>\\:\*\|":]/g, ""); // Sanitize illegal characters
+      rawDesc = rawDesc.trim().replace(/[#/?<>\\:*|":]/g, ""); // Sanitize illegal characters
 
       // 渲染文件名用的上下文
       const context = {
@@ -6710,12 +7261,12 @@ const requires = this;
 
       let baseName = "";
       try {
-        baseName = runInContext(context, filename_template);
+        baseName = renderTemplate(context, filename_template);
       } catch (error) {
         if (throw_err) throw error;
         console.error(`[dy-dl] Error rendering filename template:`);
         console.error(error);
-        baseName = runInContext(context, Config.defaults.filename_template);
+        baseName = renderTemplate(context, Config.defaults.filename_template);
       }
       if (baseName.length > filename_max_length) {
         baseName = baseName.slice(0, filename_max_length);
@@ -6808,22 +7359,15 @@ const requires = this;
 
     _flag_start_download() {
       this.downloading = true;
-      // const { $btn } = this; // Original script had $btn in status but didn't use it for UI updates.
-      // if ($btn) {
-      //   // TODO: progress
-      // }
       return () => {
         this.downloading = false;
-        // if ($btn) {
-        //   // TODO: progress
-        // }
       };
     }
 
     _lock_download(download_fn) {
       return async (...args) => {
         if (this.downloading) {
-          alert("[dy-dl]正在下载中...请稍等或刷新页面");
+          ToastCenter.update("已有下载任务正在进行，请先等待、暂停或取消当前任务", 2400);
           return;
         }
         const releaseLock = this._flag_start_download();
@@ -6831,7 +7375,9 @@ const requires = this;
           await download_fn(...args);
         } finally {
           // Small delay before releasing lock, as in original script
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise((r) => {
+            setTimeout(r, 300);
+          });
           releaseLock();
         }
       };
@@ -6959,7 +7505,7 @@ const requires = this;
             );
             break;
 
-          default:
+          default: {
             // 按清晰度关键字匹配（1080P、720P 等）
             const keywordMap = {
               "1080P": ["1080"],
@@ -6980,6 +7526,7 @@ const requires = this;
               if (matched.length > 0) candidates = matched;
             }
             break;
+          }
         }
       }
 
@@ -7032,6 +7579,157 @@ const requires = this;
     }
 
     /**
+     * 提取作品原声候选地址。
+     *
+     * 抖音不同播放器版本会混用 camelCase / snake_case；这里只读取 music
+     * 对象中的原始播放地址，不从视频流转码，也不会下载视频画面。
+     */
+    _get_original_audio_urls(media = this.current_media) {
+      const music = media?.music;
+      if (!music) return [];
+
+      const playSources = [
+        music.playUrl,
+        music.play_url,
+        music.playAddr,
+        music.play_addr,
+      ].filter(Boolean);
+      const urls = [];
+      const append = (value) => {
+        if (typeof value === "string" && value.trim()) {
+          urls.push(value.trim());
+        }
+      };
+
+      for (const source of playSources) {
+        if (typeof source === "string") {
+          append(source);
+          continue;
+        }
+
+        const lists = [
+          source.urlList,
+          source.url_list,
+          source.urls,
+        ];
+        for (const list of lists) {
+          if (Array.isArray(list)) list.forEach(append);
+        }
+        append(source.url);
+        append(source.src);
+      }
+
+      return Array.from(new Set(urls));
+    }
+
+    /**
+     * 以极小网络开销确认原声音频真实格式。
+     *
+     * 优先 HEAD；CDN 不支持 HEAD 时再请求 1 字节 Range。只探测前两个候选
+     * 地址，每次最多等待 5 秒，避免菜单操作被长时间阻塞。
+     */
+    async _probe_original_audio_meta(urls) {
+      const candidates = Array.isArray(urls) ? urls.slice(0, 2) : [];
+
+      for (const url of candidates) {
+        for (const method of ["HEAD", "GET"]) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 5000);
+          try {
+            const response = await fetch(url, {
+              method,
+              credentials: "same-origin",
+              headers: method === "GET" ? { Range: "bytes=0-0" } : undefined,
+              signal: controller.signal,
+            });
+            const contentType = response.headers.get("content-type") || "";
+            if (method === "GET") {
+              try {
+                await response.body?.cancel();
+              } catch {}
+            }
+            if (
+              response.ok &&
+              /^(?:audio\/|video\/mp4)/i.test(contentType.trim())
+            ) {
+              return resolveAudioFileMeta(contentType, url);
+            }
+          } catch {
+            // 跨域 CDN 可能拒绝探测；继续尝试备用地址或按 URL 判断。
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+      }
+
+      return resolveAudioFileMeta("", candidates[0] || "");
+    }
+
+    /** 下载当前作品原声音频。 */
+    async _extract_original_audio_logic() {
+      this.refresh_player();
+      const mediaSnapshot = this.current_media;
+      if (!mediaSnapshot) {
+        ToastCenter.update("暂未读取到当前作品，请先播放视频或等待页面加载", 2400);
+        return { ok: false, reason: "missing_media" };
+      }
+
+      const urls = this._get_original_audio_urls(mediaSnapshot);
+      if (!urls.length) {
+        ToastCenter.update("当前作品未检测到可下载的原声音频", 2400);
+        return { ok: false, reason: "missing_audio" };
+      }
+
+      ToastCenter.update("正在获取原声音频", 0);
+      const audioMeta = await this._probe_original_audio_meta(urls);
+      const filenameBase = `原声_${this._build_filename(mediaSnapshot)}`;
+
+      let result;
+      try {
+        result = await this.downloader.download_file(
+          urls[0],
+          filenameBase,
+          urls.slice(1),
+          {
+            media: mediaSnapshot,
+            fileKind: "audio",
+            forcedExtension: audioMeta.ext,
+            forcedMime: audioMeta.mime,
+            progressLabels: {
+              connecting: "正在连接原声音频",
+              downloading: "正在下载原声",
+              processing: "正在保存原声",
+              completed: "原声已保存",
+            },
+            refreshSources: async () => {
+              this.refresh_player();
+              return this.current_media?.awemeId === mediaSnapshot.awemeId
+                ? this._get_original_audio_urls(this.current_media)
+                : [];
+            },
+          }
+        );
+      } catch (error) {
+        console.error("[dy-dl]原声音频下载失败：", error);
+        ToastCenter.update(
+          `原声音频下载失败：${error?.message || "请稍后重试"}`,
+          3000
+        );
+        return { ok: false, reason: "audio_download_failed", error };
+      }
+
+      if (result?.completed) {
+        ToastCenter.update("原声已保存", 1800);
+      } else if (result?.submitted) {
+        ToastCenter.update("原声下载任务已提交", 2200);
+      } else if (!result?.cancelled) {
+        ToastCenter.update(result?.message || "原声音频下载失败，请稍后重试", 2600);
+      }
+
+      return result;
+    }
+
+    /**
      * 抖音作品有两种形式：
      * 1. 单图、单视频
      * 2. 图集
@@ -7056,7 +7754,15 @@ const requires = this;
       } = options;
 
       if (!media) {
-        if (alertOnFail) alert("[dy-dl]无当前媒体信息，请尝试播放视频或等待加载。");
+        if (alertOnFail) {
+          void ProductDialog.open({
+            icon: "info",
+            title: "暂未读取到当前作品",
+            message: "请先播放一次视频，或等待页面加载完成后再试。",
+            primaryLabel: "我知道了",
+            hideSecondary: true,
+          });
+        }
         return { ok: false, reason: "missing_media" };
       }
 
@@ -7240,7 +7946,16 @@ const requires = this;
       if (completed) toastUpdate(isAlbum ? "图集下载完成" : "下载完成", 1800);
       else if (submitted || mixed) toastUpdate("任务已提交下载器", 2200);
       else if (partial) toastUpdate("部分文件下载失败", 2600);
-      else if (alertOnFail) alert("[dy-dl]无法下载当前媒体，请刷新后重试。");
+      else if (alertOnFail) {
+        void ProductDialog.open({
+          icon: "warning",
+          title: "当前作品下载失败",
+          message: lastFailure?.message || "可用下载地址均未成功。",
+          detail: "请检查网络或登录状态，也可以在任务中心点击“重新下载”。",
+          primaryLabel: "我知道了",
+          hideSecondary: true,
+        });
+      }
 
       return {
         ok,
@@ -7361,12 +8076,19 @@ const requires = this;
     async download_thumb() {
       this.refresh_player();
       if (!this.current_media) {
-        alert("[dy-dl]无当前媒体信息，请尝试播放视频或等待加载。");
+        ToastCenter.update("暂未读取到当前作品，请先播放视频或等待页面加载", 2400);
         return;
       }
-      const { video } = this.current_media;
+      const { video = {} } = this.current_media;
       // 第一个是压缩的，所以用第二个
-      const thumb = video.originCoverUrlList[1] || video.originCoverUrlList[0];
+      const covers = Array.isArray(video.originCoverUrlList)
+        ? video.originCoverUrlList
+        : [];
+      const thumb = covers[1] || covers[0] || video.cover?.urlList?.[0] || "";
+      if (!thumb) {
+        ToastCenter.update("当前作品没有可用封面地址", 2200);
+        return;
+      }
       const filename_base = this._build_filename(this.current_media);
       this.downloader.download_file(thumb, `thumb_${filename_base}`, [], {
         media: this.current_media,
@@ -7378,7 +8100,7 @@ const requires = this;
     async show_media_details() {
       this.refresh_player();
       if (!this.current_media) {
-        alert("[dy-dl]无当前媒体信息，请尝试播放视频或等待加载。");
+        ToastCenter.update("暂未读取到当前作品，请先播放视频或等待页面加载", 2400);
         return;
       }
 
@@ -7407,7 +8129,7 @@ const requires = this;
       modal.root.style.borderRadius = "8px";
       modal.root.style.overflow = "hidden";
 
-      const { html, render } = requires.htmPreact;
+      const { html, render } = getHtmPreact();
       render(
         html`<${App}
           media=${this.current_media}
@@ -7435,7 +8157,7 @@ const requires = this;
       modal.root.style.borderRadius = "16px";
       modal.root.style.overflow = "hidden";
 
-      const { html, render } = requires.htmPreact;
+      const { html, render } = getHtmPreact();
       render(
         html`<${ConfigModalComponents.App} config=${Config.global} initialTab=${initialTab} />`,
         modal.root
@@ -7876,7 +8598,9 @@ const requires = this;
       } else {
         container.scrollTo({ top: nextTop, behavior: "auto" });
       }
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1200);
+      });
       return true;
     }
   }
@@ -8563,7 +9287,9 @@ const requires = this;
 
           // 到达当前底部时给抖音一次继续懒加载的机会；连续无新增后才停止。
           if (!moved && stableRounds < 4) {
-            await new Promise((resolve) => setTimeout(resolve, 950));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 950);
+            });
             this.collect();
             const late = this.jobState?.knownIds?.length || 0;
             if (late > after) stableRounds = 0;
@@ -8629,9 +9355,12 @@ const requires = this;
 
       const pausedState = this.pausedRun?.recoveryContext?.__resumeState || null;
       const resumeCapability = this.pausedRun
-        ? pausedState?.capability || (pausedState?.offset > 0 ? "unknown" : "unsupported")
+        ? this.pausedRun.queueBoundary
+          ? "queue_ready"
+          : pausedState?.capability || (pausedState?.offset > 0 ? "unknown" : "unsupported")
         : "none";
       const resumeStatusMap = {
+        queue_ready: "已在任务之间暂停，可从下一项继续",
         unknown: "已暂停，续传能力尚未检查",
         checking: "正在检查断点续传",
         supported: "已确认支持断点续传",
@@ -8990,7 +9719,46 @@ const requires = this;
           return;
         }
 
-        if (this.jobPauseRequested && !this.jobRunning) return;
+        // 用户可能恰好在两个文件切换的间隙点击暂停。此时没有活动网络请求，
+        // 直接保存队列边界，不能再启动下一项下载。
+        if (this.jobPauseRequested) {
+          this.jobState.status = "paused";
+          this.currentRun.currentIndex = index;
+          this.currentRun.currentAwemeId = awemeId;
+          this.currentRun.current = {
+            filename:
+              this.getTaskSnapshot(awemeId)?.desc ||
+              MediaHandler.toShortId(awemeId),
+            phase: "paused",
+            status: "已暂停，可从下一项继续",
+            loaded: 0,
+            total: 0,
+            percent: 0,
+            batch: true,
+            taskIndex: index + 1,
+            taskTotal: pendingIds.length,
+          };
+          this._setRunItem(awemeId, {
+            phase: "paused",
+            status: "已暂停，可从此项继续",
+          });
+          this.pausedRun = {
+            queueIds: pendingIds,
+            nextIndex: index,
+            currentAwemeId: awemeId,
+            recoveryContext: null,
+            queueBoundary: true,
+            currentRun: {
+              ...this.currentRun,
+              current: { ...this.currentRun.current },
+              items: this.currentRun.items.map((item) => ({ ...item })),
+            },
+          };
+          this._saveJobState();
+          this.emit("stateChanged", this);
+          this._publishTaskCenter();
+          return;
+        }
 
         let media = this.dataService.feedMediaCache.get(awemeId) || this.dataService.refreshMedia(awemeId);
         if (media) this._rememberTaskSnapshot(media, index + 1);
@@ -9059,7 +9827,13 @@ const requires = this;
           onProgress: (progress) => this._emitProgress(progress),
         });
 
-        if (result?.paused || this.jobPauseRequested) {
+        if (
+          result?.paused ||
+          (this.jobPauseRequested &&
+            !result?.completed &&
+            !result?.submitted &&
+            !result?.mixed)
+        ) {
           this.jobState.status = "paused";
           const resumeCapability =
             result?.resumeCapability ||
@@ -9149,7 +9923,9 @@ const requires = this;
         this._saveJobState();
         this.emit("countsUpdated", this.getCounts());
         this._publishTaskCenter();
-        await new Promise((resolve) => setTimeout(resolve, 280));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 280);
+        });
       }
 
       this.jobState.status = "completed";
@@ -9176,8 +9952,7 @@ const requires = this;
 
   // ========== 批量下载管理模态框 ==========
   const ProfileJobModalComponents = (() => {
-    const { useState, useEffect, useMemo, useCallback } = requires?.htmPreact;
-    const html = requires?.htmPreact?.html;
+    const { useState, useEffect, useMemo, useCallback, html } = getHtmPreact();
     const css = createCSS();
     const icon = (name) => html`<span class="dy-dl-inline-icon-v106" dangerouslySetInnerHTML=${{ __html: UI_ICONS[name] || "" }}></span>`;
 
@@ -9404,7 +10179,7 @@ const requires = this;
         if (ok) downloadManager.removeFailed(id);
       };
 
-      const resumePrimary = resumeCapability === "supported" ? { label: "继续下载", icon: "play", action: handleResume }
+      const resumePrimary = ["supported", "queue_ready"].includes(resumeCapability) ? { label: "继续下载", icon: "play", action: handleResume }
         : ["unsupported", "invalid_range"].includes(resumeCapability) ? { label: "重新下载当前文件", icon: "downloadCloud", action: handleRestartCurrent }
         : resumeCapability === "network_unavailable" ? { label: "重新检查", icon: "retry", action: handleResume }
         : { label: "检查并继续", icon: "play", action: handleResume };
@@ -9481,9 +10256,9 @@ const requires = this;
 
                 ${snapshot.canResume && selectedItem.awemeId === run?.currentAwemeId ? html`
                   <div class=${c.note({ tone: ["unsupported", "invalid_range"].includes(resumeCapability) ? "warning" : "info" })}>
-                    ${resumeCapability === "unknown" ? `已保留 ${DownloadFormat.bytes(snapshot.resumeBytes)}，尚未检查服务器是否支持安全续传。` : resumeCapability === "supported" ? "服务器已确认支持断点续传。" : resumeCapability === "network_unavailable" ? "续传检查因网络或超时未完成，部分文件仍被保留。" : "服务器无法提供有效断点数据。重新下载只会清空当前文件，不影响已完成任务。"}
+                    ${resumeCapability === "queue_ready" ? "队列已在两个文件之间安全暂停，可直接从下一项继续。" : resumeCapability === "unknown" ? `已保留 ${DownloadFormat.bytes(snapshot.resumeBytes)}，尚未检查服务器是否支持安全续传。` : resumeCapability === "supported" ? "服务器已确认支持断点续传。" : resumeCapability === "network_unavailable" ? "续传检查因网络或超时未完成，部分文件仍被保留。" : "服务器无法提供有效断点数据。重新下载只会清空当前文件，不影响已完成任务。"}
                   </div>
-                  <div class=${c.actions}><button class=${c.primary} onClick=${resumePrimary.action}>${icon(resumePrimary.icon)}<span>${resumePrimary.label}</span></button>${!["unsupported", "invalid_range"].includes(resumeCapability) ? html`<button class=${c.secondary} onClick=${handleRestartCurrent}>${icon("downloadCloud")}<span>重新下载当前文件</span></button>` : null}<button class=${c.dangerLink} onClick=${handleCancel}>${icon("cancel")}<span>取消批量任务</span></button></div>
+                  <div class=${c.actions}><button class=${c.primary} onClick=${resumePrimary.action}>${icon(resumePrimary.icon)}<span>${resumePrimary.label}</span></button>${snapshot.resumeBytes > 0 && !["unsupported", "invalid_range"].includes(resumeCapability) ? html`<button class=${c.secondary} onClick=${handleRestartCurrent}>${icon("downloadCloud")}<span>重新下载当前文件</span></button>` : null}<button class=${c.dangerLink} onClick=${handleCancel}>${icon("cancel")}<span>取消批量任务</span></button></div>
                 ` : snapshot.jobRunning && selectedItem.awemeId === run?.currentAwemeId ? html`<div class=${c.actions}><button class=${c.secondary} onClick=${handlePause}>${icon("pause")}<span>暂停下载</span></button></div>` : selectedItem.failed ? html`
                   <div class=${c.note({ tone: selectedItem.failed.unavailable ? "warning" : "danger" })}>${selectedItem.failed.message || selectedItem.failed.reason || "下载未完成"}</div>
                   <div class=${c.actions}><button class=${c.primary} onClick=${() => downloadManager.retryFailed([selectedItem.awemeId]).catch((e) => ToastCenter.update(`重试失败：${e?.message || e}`, 2600))}>${icon(selectedItem.failed.unavailable ? "retry" : "downloadCloud")}<span>${selectedItem.failed.unavailable ? "重新检测并下载" : "重新下载"}</span></button><button class=${c.secondary} onClick=${() => handleFailureDetail(selectedItem)}>${icon("info")}<span>查看原因</span></button><button class=${c.dangerLink} onClick=${() => handleRemove(selectedItem.awemeId)}>${icon("cancel")}<span>移除失败记录</span></button></div>
@@ -9521,7 +10296,7 @@ const requires = this;
         dataService: this.dataService,
       });
       this.floating_ui = new FloatingPanel({
-        mediaHandler,
+        mediaHandler: this.mediaHandler,
         profilePageHandler: this,
       });
 
@@ -9568,8 +10343,8 @@ const requires = this;
 
       try {
         if (
-          !requires?.htmPreact?.render ||
-          !requires?.htmPreact?.html
+          !getHtmPreact().render ||
+          !getHtmPreact().html
         ) {
           throw new Error(
             "Preact 组件未加载，无法显示批量下载管理器"
@@ -9584,7 +10359,7 @@ const requires = this;
           root.style.borderRadius = "12px";
           root.setAttribute("tabindex", "-1");
 
-          const { html, render } = requires.htmPreact;
+          const { html, render } = getHtmPreact();
 
           render(
             html`<${ProfileJobModalComponents.App}
@@ -9796,6 +10571,14 @@ const requires = this;
     _flushQueue() {
       this.flushTimer = null;
 
+      // 抖音是单页应用：站内进入或离开作者主页时不会重新加载脚本。
+      // 每批 DOM 变更只做一次轻量路由同步，确保面板及时挂载/隐藏。
+      if (this.profilePageHandler.dataService.isProfilePage()) {
+        this.profilePageHandler.mount_ui();
+      } else {
+        this.profilePageHandler.floating_ui.syncVisibility();
+      }
+
       const roots = [];
       for (const root of this.pendingRoots) {
         roots.push(root);
@@ -9960,20 +10743,27 @@ const requires = this;
             },
           },
           {
+            label: "提取原声",
+            callback: () => {
+              this.mediaHandler.extract_original_audio();
+            },
+          },
+          {
             label: "下载弹幕",
             callback: () => {
               this.mediaHandler.refresh_player();
               if (!this.mediaHandler.player) {
-                alert("当前没有播放器实例，无法下载弹幕。");
+                ToastCenter.update("暂未读取到播放器，请先播放视频后再导出弹幕", 2400);
                 return;
               }
               if (!this.mediaHandler.current_media) {
-                alert("当前没有媒体实例，无法下载弹幕。");
+                ToastCenter.update("暂未读取到当前作品，请等待页面加载后再试", 2400);
                 return;
               }
               const content = this.danmakuHandler.getDanmakuAssFileContent(
                 this.mediaHandler.player
               );
+              if (!content) return;
               const filename = this.mediaHandler._build_filename(
                 this.mediaHandler.current_media
               );
@@ -10115,6 +10905,18 @@ const requires = this;
     addHotkey(key, fn) {
       const callback = (ev) => {
         if (ev.key.toLowerCase() !== key.toLowerCase()) return;
+        if (
+          ev.defaultPrevented ||
+          ev.repeat ||
+          ev.isComposing ||
+          ev.ctrlKey ||
+          ev.metaKey ||
+          ev.altKey
+        ) {
+          return;
+        }
+
+        if (document.querySelector('[role="dialog"]')) return;
 
         const activeElement = /** @type {HTMLElement} */ (
           document.activeElement
@@ -10125,8 +10927,19 @@ const requires = this;
           const isInputElement =
             tagName === "INPUT" ||
             tagName === "TEXTAREA" ||
+            tagName === "SELECT" ||
+            tagName === "BUTTON" ||
             activeElement.isContentEditable;
           if (isInputElement) return;
+
+          // 脚本弹窗打开时，M 键应服务于当前界面，不能在后台误触下载。
+          if (
+            activeElement.closest?.(
+              '[role="dialog"], .dy-dl-modal-overlay-v1, .dy-dl-product-dialog-overlay-v106'
+            )
+          ) {
+            return;
+          }
         }
 
         ev.preventDefault();
@@ -10139,8 +10952,7 @@ const requires = this;
   }
   // #endregion
 
-  /**
-   * 将毫秒时间戳转换为 ASS 格式的时间字符串  /**
+    /**
    * 将毫秒时间戳转换为 ASS 格式的时间字符串 (H:MM:SS.ss)
    */
   function msToAssTime(ms) {
@@ -10292,8 +11104,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
      * @param {import("./types").DouyinPlayer.PlayerInstance} player
      */
     getDanmakuList(player) {
-      // TODO 需要增强这个函数，从player上取到的只是渲染数据，如果是长视频只包含一部分
-      // 主要是需要监听 aweme/v1/web/danmaku/get_v2 重放这个请求，但是鉴权逻辑比较复杂...所以现在没实现
+      // 当前只能读取播放器已经加载的弹幕；长视频尚未加载的后续弹幕不会被导出。
 
       return player?.danmaku?.main?.data || [];
     }
@@ -10306,9 +11117,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
      * @param {import("./types").DouyinPlayer.PlayerInstance} player
      */
     getMediaSize(player) {
-      const {
-        sizeInfo: { width, height },
-      } = player;
+      const width = Number(
+        player?.sizeInfo?.width || player?.video?.videoWidth || 1920
+      );
+      const height = Number(
+        player?.sizeInfo?.height || player?.video?.videoHeight || 1080
+      );
       return { width, height };
     }
 
@@ -10320,13 +11134,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     getDanmakuAssFileContent(player) {
       const list = this.getDanmakuList(player);
       if (!list || list.length === 0) {
-        alert("当前视频弹幕为空，或者未加载完成");
-        return;
+        ToastCenter.update("当前视频没有弹幕，或弹幕尚未加载完成", 2400);
+        return null;
       }
       const size = this.getMediaSize(player);
       return this.convertDanmakuToAss(list, {
-        // TODO: 这里可以写入一些视频元数据，暂时占位写个链接
-        title: "download from https://github.com/zhzLuke96/douyin-dl-user-js",
+        title: "由抖音网页版增强下载工具导出",
         playResX: size.width,
         playResY: size.height,
       });
@@ -10734,7 +11547,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
        * V1.0.1 “关于 / 需求反馈”信息面板
        *
        * 注意：文字内容不要在 CSS 里改。
-       * 作者 / 邮箱 / 免责声明请搜索 ABOUT_PANEL_CONTENT 修改。
+       * 维护者 / 项目仓库 / 交流群 / 免责声明请搜索 ABOUT_PANEL_CONTENT 修改。
        * ================================================================ */
       .dy-dl-about-root-v101 {
         width: min(680px, 90vw) !important;
@@ -10818,14 +11631,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         font-weight: 700;
       }
 
-      .dy-dl-about-grid {
-        display: grid;
-        grid-template-columns: 1fr 1.45fr;
-        gap: 10px;
-        margin-bottom: 12px;
-      }
-
-      .dy-dl-about-card,
+      .dy-dl-about-project-card,
       .dy-dl-about-section {
         box-sizing: border-box;
         border: 1px solid rgba(255,255,255,.09);
@@ -10833,45 +11639,78 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         background: #1e2025;
       }
 
-      .dy-dl-about-card {
-        padding: 13px 14px;
+      .dy-dl-about-project-card {
+        overflow: hidden;
       }
 
-      .dy-dl-about-card-label,
+      .dy-dl-about-info-row {
+        min-height: 48px;
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        align-items: center;
+        gap: 14px;
+        padding: 0 15px;
+        border-bottom: 1px solid rgba(255,255,255,.07);
+      }
+
+      .dy-dl-about-info-row:last-child {
+        border-bottom: 0;
+      }
+
+      .dy-dl-about-info-label,
       .dy-dl-about-section-title {
-        margin-bottom: 7px;
         color: #9aa0aa;
         font-size: 11px;
         font-weight: 700;
       }
 
-      .dy-dl-about-card-value {
+      .dy-dl-about-section-title {
+        margin-bottom: 7px;
+      }
+
+      .dy-dl-about-info-value {
+        min-width: 0;
         color: #f5f6f7;
         font-size: 13px;
         font-weight: 700;
         word-break: break-all;
       }
 
-      .dy-dl-about-email-row {
-        display: flex;
+      .dy-dl-about-info-value a,
+      .dy-dl-about-attribution a {
+        color: #8fa7ff;
+        text-decoration: none;
+      }
+
+      .dy-dl-about-info-value a:hover,
+      .dy-dl-about-attribution a:hover {
+        color: #b8c5ff;
+        text-decoration: underline;
+      }
+
+      .dy-dl-about-group-link {
+        display: inline-flex;
         align-items: center;
-        gap: 9px;
-      }
-
-      .dy-dl-about-copy-email {
-        flex: 0 0 auto;
-        padding: 5px 9px;
-        border: 1px solid rgba(255,255,255,.15);
-        border-radius: 7px;
-        background: #292c31;
-        color: #e9ebee;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid rgba(91,124,250,.42);
+        border-radius: 8px;
+        background: rgba(91,124,250,.12);
+        color: #aebcff !important;
         font-size: 11px;
-        cursor: pointer;
+        text-decoration: none !important;
       }
 
-      .dy-dl-about-copy-email:hover {
-        border-color: rgba(29,155,240,.60);
-        background: #30343a;
+      .dy-dl-about-group-link:hover {
+        border-color: rgba(91,124,250,.72);
+        background: rgba(91,124,250,.20);
+      }
+
+      .dy-dl-about-attribution {
+        margin: 8px 2px 2px;
+        color: #767f8d;
+        font-size: 10px;
+        line-height: 1.6;
       }
 
       .dy-dl-about-section {
@@ -10943,9 +11782,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       }
 
       @media (max-width: 650px) {
-        .dy-dl-about-grid,
         .dy-dl-about-features {
           grid-template-columns: 1fr;
+        }
+
+        .dy-dl-about-info-row {
+          grid-template-columns: 72px minmax(0, 1fr);
+          gap: 10px;
         }
 
         .dy-dl-about-free {
@@ -11087,10 +11930,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
       .dy-dl-about-root-v101 { background: var(--dy-dl-bg-panel) !important; border-color: var(--dy-dl-border) !important; }
       .dy-dl-about-logo { border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-primary-soft) !important; color: #9AAEFF !important; }
-      .dy-dl-about-card, .dy-dl-about-section { border-color: var(--dy-dl-border) !important; background: var(--dy-dl-bg-card) !important; }
+      .dy-dl-about-project-card, .dy-dl-about-section { border-color: var(--dy-dl-border) !important; background: var(--dy-dl-bg-card) !important; }
       .dy-dl-about-dot { background: var(--dy-dl-primary) !important; }
-      .dy-dl-about-copy-email { border-color: var(--dy-dl-border) !important; background: var(--dy-dl-bg-control) !important; color: var(--dy-dl-text-secondary) !important; }
-      .dy-dl-about-copy-email:hover { border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-bg-hover) !important; }
+
+      .dy-dl-author-stat-status { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; color: var(--dy-dl-text-muted); font-size: 11px; }
+      .dy-dl-author-stat-status[data-state="failed"] { color: var(--dy-dl-warning); }
+      .dy-dl-author-stat-retry { min-height: 26px; padding: 0 9px; border: 1px solid var(--dy-dl-border); border-radius: 7px; background: var(--dy-dl-bg-control); color: var(--dy-dl-text-secondary); font: 650 11px/1 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; cursor: pointer; }
+      .dy-dl-author-stat-retry:hover { border-color: var(--dy-dl-primary-border); background: var(--dy-dl-bg-hover); color: var(--dy-dl-text); }
 
       @media (max-width: 820px) {
         .dy-dl-product-dialog-v106 { grid-template-columns: 34px minmax(0,1fr); padding: 18px; }
@@ -11177,11 +12023,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   mediaHandler.init(); // Starts player detection
   domPatcher.startObserving(); // Starts DOM observation and initial scan
-  // 尝试注入ui，可能放到dom patcher里面好点，但是这样够了，要是没有就刷新就完事了
   profilePageHandler.mount_ui();
 
-  // TODO: 支持自定义快捷键，没太想好怎么搞好点...
   hotkeyManager.addHotkey("m", () => mediaHandler.download_current_media());
   // #endregion
-  console.log("[dy-dl] V1.0.5 Unified Task Center / Recovery 已启动");
+  console.log("[dy-dl] V1.0.8 稳定增强版已启动");
 })();
