@@ -31,6 +31,34 @@
 
 ---
 
+**📸 界面预览与功能演示**
+
+**1. 播放页悬浮插件与快速下载**
+> 在视频播放页右下角自动注入“插件”入口，点击即可快速调出下载与配置菜单。
+![播放页插件入口](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114600_342_86.png?raw=true)
+
+---
+
+**2. 媒体资源与清晰度解析**
+> 支持独立弹窗查看高清封面、不同分辨率视频源、音轨提取及原始 JSON 数据。
+![媒体资源解析](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114623_343_86.png?raw=true)
+
+---
+
+**3. 作者主页批量扫描与选择**
+> 进入作者主页后自动唤起批量控制面板，支持一键全选、扫描全部作品及勾选下载。
+![需求反馈与交流群](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
+
+![作者主页批量扫描](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
+
+---
+
+**4. 批量下载任务管理中心**
+> 独立的任务管理弹窗，实时查看下载进度、下载速度，支持暂停、重试与失败排查。
+![批量下载任务中心](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
+
+---
+
 ### 📖 安装与使用指南
 
 1. **安装环境**：请确保您的浏览器已安装 Tampermonkey (油猴) 扩展程序。
