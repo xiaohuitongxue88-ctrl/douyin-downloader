@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          抖音网页版增强下载工具
 // @namespace     https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
-// @version       1.0.8
+// @version       1.0.9
 // @description   基于开源项目 douyin-dl-user-js 的稳定增强维护版；支持无水印视频、图集批量下载、原声音频提取、弹幕 ASS 导出、作者主页批量任务及断点恢复。
 // @author        小辉同學
 // @match         https://*.douyin.com/*
@@ -4028,7 +4028,7 @@ const requires = this;
   const ABOUT_PANEL_CONTENT = Object.freeze({
     title: "抖音下载 · 关于 / 需求反馈",
     subtitle: "稳定增强维护版",
-    version: "V1.0.8",
+    version: "V1.0.9",
 
     // ---- 项目与联系信息 ----
     maintainer: "小辉同學",
@@ -5481,6 +5481,45 @@ const requires = this;
     const authorProfileCache = new Map();
     const AUTHOR_PROFILE_CACHE_TTL = 10 * 60 * 1000;
 
+    const hasCompleteAuthorStats = (profile) =>
+      readAuthorNumber(profile, null, AUTHOR_FOLLOWER_KEYS) != null &&
+      readAuthorNumber(profile, null, AUTHOR_FAVORITE_KEYS) != null;
+
+    /**
+     * 合并不同数据通道返回的作者资料。
+     *
+     * 抖音有时会把 user 与 statistics 分开放置，或在接口降级时只返回一项
+     * 统计。这里分别选择可信度最高的粉丝数和获赞数，避免“找到获赞数后就
+     * 提前结束”，导致粉丝数一直显示为“—”。
+     */
+    const mergeAuthorProfiles = (...profiles) => {
+      const valid = profiles.filter(
+        (profile) => profile && typeof profile === "object"
+      );
+      if (!valid.length) return null;
+
+      const result = Object.assign({}, ...valid);
+      for (const profile of valid) {
+        const followerCount = readAuthorNumber(
+          profile,
+          null,
+          AUTHOR_FOLLOWER_KEYS
+        );
+        const totalFavorited = readAuthorNumber(
+          profile,
+          null,
+          AUTHOR_FAVORITE_KEYS
+        );
+        if (result.followerCount == null && followerCount != null) {
+          result.followerCount = followerCount;
+        }
+        if (result.totalFavorited == null && totalFavorited != null) {
+          result.totalFavorited = totalFavorited;
+        }
+      }
+      return result;
+    };
+
     /**
      * 从接口或页面预载 JSON 中寻找作者统计对象。
      * 只做有深度和节点上限的遍历，避免处理异常大对象时占用过多资源。
@@ -5495,6 +5534,10 @@ const requires = this;
       let visited = 0;
       let best = null;
       let bestScore = -1;
+      let bestFollower = null;
+      let bestFollowerScore = -1;
+      let bestFavorite = null;
+      let bestFavoriteScore = -1;
 
       while (cursor < queue.length && visited < 2500) {
         const { value, depth } = queue[cursor++];
@@ -5503,14 +5546,11 @@ const requires = this;
         visited++;
 
         const followerCount = readAuthorNumber(value, null, AUTHOR_FOLLOWER_KEYS);
-        const totalFavorited = readAuthorNumber(value, null, [
-          "totalFavorited",
-          "total_favorited",
-          "totalFavoritedCount",
-          "total_favorited_count",
-          "favoritedCount",
-          "favorited_count",
-        ]);
+        const totalFavorited = readAuthorNumber(
+          value,
+          null,
+          AUTHOR_FAVORITE_KEYS
+        );
         const candidateId = String(
           value.secUid ||
             value.sec_uid ||
@@ -5520,16 +5560,25 @@ const requires = this;
         );
 
         if (followerCount != null || totalFavorited != null) {
+          const idMatches = expectedId && candidateId === expectedId;
+          const idConflicts = expectedId && candidateId && candidateId !== expectedId;
           let score = followerCount != null && totalFavorited != null ? 12 : 5;
-          if (expectedId && candidateId === expectedId) score += 30;
+          if (idMatches) score += 30;
+          if (idConflicts) score -= 30;
           if (value.nickname || value.nickName || value.uid) score += 3;
+          score -= depth * 0.2;
+
+          if (followerCount != null && score > bestFollowerScore) {
+            bestFollowerScore = score;
+            bestFollower = followerCount;
+          }
+          if (totalFavorited != null && score > bestFavoriteScore) {
+            bestFavoriteScore = score;
+            bestFavorite = totalFavorited;
+          }
           if (score > bestScore) {
             bestScore = score;
-            best = {
-              ...value,
-              followerCount,
-              totalFavorited,
-            };
+            best = { ...value };
           }
         }
 
@@ -5560,14 +5609,187 @@ const requires = this;
         }
       }
 
-      return best;
+      return bestFollower != null || bestFavorite != null
+        ? {
+            ...(best || {}),
+            followerCount: bestFollower,
+            totalFavorited: bestFavorite,
+          }
+        : null;
+    };
+
+    const getAuthorPageWindow = () => {
+      try {
+        if (typeof unsafeWindow !== "undefined") return unsafeWindow;
+      } catch {}
+      return window;
+    };
+
+    const readCookieValue = (name) => {
+      const prefix = `${name}=`;
+      const part = String(document.cookie || "")
+        .split(";")
+        .map((item) => item.trim())
+        .find((item) => item.startsWith(prefix));
+      return part ? decodeURIComponent(part.slice(prefix.length)) : "";
+    };
+
+    /**
+     * 从抖音页面已经发出的同源接口请求中复用公开设备参数。
+     * 不读取响应内容，不监听网络，也不持续轮询；只在打开作者信息且缺少统计
+     * 时读取一次 Performance 记录，以提高官方资料接口的成功率。
+     */
+    const collectAuthorApiContext = () => {
+      const currentScreen = getAuthorPageWindow()?.screen;
+      const context = new URLSearchParams({
+        device_platform: "webapp",
+        aid: "6383",
+        channel: "channel_pc_web",
+        publish_video_strategy_type: "2",
+        source: "channel_pc_web",
+        pc_client_type: "1",
+        cookie_enabled: navigator.cookieEnabled ? "true" : "false",
+        browser_language: navigator.language || "zh-CN",
+        browser_platform: navigator.platform || "Win32",
+        browser_online: navigator.onLine === false ? "false" : "true",
+        screen_width: String(currentScreen?.width || 1920),
+        screen_height: String(currentScreen?.height || 1080),
+      });
+      const reusableKeys = new Set([
+        "device_platform",
+        "aid",
+        "channel",
+        "pc_client_type",
+        "version_code",
+        "version_name",
+        "cookie_enabled",
+        "screen_width",
+        "screen_height",
+        "browser_language",
+        "browser_platform",
+        "browser_name",
+        "browser_version",
+        "browser_online",
+        "engine_name",
+        "engine_version",
+        "os_name",
+        "os_version",
+        "cpu_core_num",
+        "device_memory",
+        "platform",
+        "downlink",
+        "effective_type",
+        "round_trip_time",
+        "webid",
+        "verifyFp",
+        "fp",
+        "msToken",
+      ]);
+
+      try {
+        const pageWindow = getAuthorPageWindow();
+        const entries = pageWindow.performance?.getEntriesByType?.("resource") || [];
+        for (let index = entries.length - 1; index >= 0; index--) {
+          const entryUrl = new URL(entries[index]?.name || "", location.href);
+          if (
+            entryUrl.origin !== location.origin ||
+            !entryUrl.pathname.startsWith("/aweme/v1/web/")
+          ) {
+            continue;
+          }
+          for (const [key, value] of entryUrl.searchParams) {
+            if (reusableKeys.has(key) && value) context.set(key, value);
+          }
+          break;
+        }
+      } catch {}
+
+      const msToken = readCookieValue("msToken");
+      if (msToken && !context.has("msToken")) context.set("msToken", msToken);
+      return context;
+    };
+
+    const extractAuthorSignature = (result, fallbackName) => {
+      if (!result) return null;
+      if (typeof result === "string") {
+        try {
+          const signedUrl = new URL(result, location.href);
+          for (const key of ["a_bogus", "X-Bogus", "_signature"]) {
+            const value = signedUrl.searchParams.get(key);
+            if (value) return { name: key, value };
+          }
+        } catch {}
+        return result.length > 8
+          ? { name: fallbackName, value: result }
+          : null;
+      }
+      if (typeof result !== "object") return null;
+
+      for (const key of ["a_bogus", "X-Bogus", "_signature", "signature"]) {
+        const value = result[key] ?? result.data?.[key];
+        if (typeof value === "string" && value.length > 8) {
+          return { name: key === "signature" ? fallbackName : key, value };
+        }
+      }
+      return null;
+    };
+
+    /**
+     * 使用抖音网页自身已加载的签名模块为作者资料请求补充动态签名。
+     * 签名函数由抖音页面提供；找不到或调用失败时静默退回普通同源请求。
+     */
+    const signAuthorApiUrl = async (inputUrl) => {
+      const url = new URL(inputUrl);
+      const pageWindow = getAuthorPageWindow();
+      let sdk = pageWindow?.byted_acrawler;
+
+      // document-idle 时签名模块通常已经存在；最多短等 1.2 秒，不常驻轮询。
+      for (let waited = 0; !sdk && waited < 1200; waited += 100) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        sdk = pageWindow?.byted_acrawler;
+      }
+      if (!sdk) return url.href;
+
+      const query = url.searchParams.toString();
+      const attempts = [];
+      if (typeof sdk.frontierSign === "function") {
+        attempts.push(
+          { fallbackName: "a_bogus", run: () => sdk.frontierSign(query) },
+          {
+            fallbackName: "X-Bogus",
+            run: () => sdk.frontierSign({ url: url.href }),
+          }
+        );
+      }
+      if (typeof sdk.sign === "function") {
+        attempts.push(
+          { fallbackName: "_signature", run: () => sdk.sign({ url: url.href }) },
+          { fallbackName: "_signature", run: () => sdk.sign(url.href) }
+        );
+      }
+
+      for (const attempt of attempts) {
+        try {
+          const result = await Promise.resolve(attempt.run());
+          const signature = extractAuthorSignature(result, attempt.fallbackName);
+          if (signature) {
+            url.searchParams.set(signature.name, signature.value);
+            return url.href;
+          }
+        } catch {}
+      }
+      return url.href;
     };
 
     const fetchAuthorResource = async (url, type, outerSignal) => {
       const controller = new AbortController();
       const abort = () => controller.abort();
       outerSignal?.addEventListener("abort", abort, { once: true });
-      const timer = setTimeout(() => controller.abort(), 8000);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, 8000);
 
       try {
         const response = await fetch(url, {
@@ -5579,6 +5801,11 @@ const requires = this;
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await (type === "json" ? response.json() : response.text());
+      } catch (error) {
+        if (timedOut && !outerSignal?.aborted && error?.name === "AbortError") {
+          throw new Error("作者资料请求超时");
+        }
+        throw error;
       } finally {
         clearTimeout(timer);
         outerSignal?.removeEventListener("abort", abort);
@@ -5601,24 +5828,48 @@ const requires = this;
       }
 
       let lastError = null;
+      let collectedProfile = null;
       try {
         const apiUrl = new URL("/aweme/v1/web/user/profile/other/", location.origin);
-        apiUrl.search = new URLSearchParams({
-          device_platform: "webapp",
-          aid: "6383",
-          channel: "channel_pc_web",
-          publish_video_strategy_type: "2",
-          source: "channel_pc_web",
-          personal_center_strategy: "1",
-          sec_user_id: key,
-        }).toString();
-        const payload = await fetchAuthorResource(apiUrl.href, "json", signal);
-        const profile = selectAuthorProfile(payload, key);
-        if (profile) {
-          authorProfileCache.set(key, { data: profile, savedAt: Date.now() });
-          return profile;
+        const apiContext = collectAuthorApiContext();
+        apiContext.set("publish_video_strategy_type", "2");
+        apiContext.set("source", "channel_pc_web");
+        apiContext.set("personal_center_strategy", "1");
+        apiContext.set("sec_user_id", key);
+        apiUrl.search = apiContext.toString();
+
+        const signedApiUrl = await signAuthorApiUrl(apiUrl.href);
+        const candidates = [...new Set([signedApiUrl, apiUrl.href])];
+        let apiReturnedProfile = false;
+
+        // 签名请求优先；若页面签名模块版本不兼容，再保留原普通请求兜底。
+        for (const candidateUrl of candidates) {
+          try {
+            const payload = await fetchAuthorResource(
+              candidateUrl,
+              "json",
+              signal
+            );
+            const profile = selectAuthorProfile(payload, key);
+            if (profile) apiReturnedProfile = true;
+            collectedProfile = mergeAuthorProfiles(collectedProfile, profile);
+            if (hasCompleteAuthorStats(collectedProfile)) {
+              authorProfileCache.set(key, {
+                data: collectedProfile,
+                savedAt: Date.now(),
+              });
+              return collectedProfile;
+            }
+          } catch (error) {
+            if (error?.name === "AbortError") throw error;
+            lastError = error;
+          }
         }
-        lastError = new Error("作者接口未返回统计数据");
+        lastError = new Error(
+          apiReturnedProfile
+            ? "作者接口仅返回部分统计"
+            : lastError?.message || "作者接口未返回统计数据"
+        );
       } catch (error) {
         if (error?.name === "AbortError") throw error;
         lastError = error;
@@ -5647,22 +5898,29 @@ const requires = this;
             try {
               const payload = JSON.parse(candidateText);
               const profile = selectAuthorProfile(payload, key);
-              if (profile) {
+              collectedProfile = mergeAuthorProfiles(collectedProfile, profile);
+              if (hasCompleteAuthorStats(collectedProfile)) {
                 authorProfileCache.set(key, {
-                  data: profile,
+                  data: collectedProfile,
                   savedAt: Date.now(),
                 });
-                return profile;
+                return collectedProfile;
               }
             } catch {}
           }
         }
-        lastError = new Error("作者主页未包含可读取的统计数据");
+        lastError = new Error(
+          collectedProfile
+            ? "作者主页仅返回部分统计"
+            : "作者主页未包含可读取的统计数据"
+        );
       } catch (error) {
         if (error?.name === "AbortError") throw error;
         lastError = error;
       }
 
+      // 部分数据仍交给界面使用，但不写入缓存，便于用户点击重试后重新请求。
+      if (collectedProfile) return collectedProfile;
       throw lastError || new Error("作者统计暂时不可用");
     };
 
@@ -5713,10 +5971,23 @@ const requires = this;
         loadAuthorProfile(secUid, controller.signal)
           .then((data) => {
             if (!active) return;
+            const completedData = mergeAuthorProfiles(
+              {
+                followerCount: baseFollowerCount,
+                totalFavorited: baseTotalFavorited,
+              },
+              data
+            );
+            if (hasCompleteAuthorStats(completedData)) {
+              authorProfileCache.set(secUid, {
+                data: completedData,
+                savedAt: Date.now(),
+              });
+            }
             setProfileState({
               secUid,
               status: "ready",
-              data,
+              data: completedData,
               message: "",
             });
           })
@@ -12027,5 +12298,5 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   hotkeyManager.addHotkey("m", () => mediaHandler.download_current_media());
   // #endregion
-  console.log("[dy-dl] V1.0.8 稳定增强版已启动");
+  console.log("[dy-dl] V1.0.9 稳定增强版已启动");
 })();
