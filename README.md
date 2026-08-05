@@ -46,10 +46,12 @@
 ---
 
 **3. 作者主页批量扫描与选择**
-> 进入作者主页后自动唤起批量控制面板，支持一键全选、扫描全部作品及勾选下载。
-![需求反馈与交流群](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
 
-![作者主页批量扫描](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
+* **步骤 1：** 进入作者主页，右下角自动唤起批量控制面板入口。
+  ![作者主页入口](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
+
+* **步骤 2：** 点击展开后，即可一键扫描作品、勾选并提交下载任务。
+  ![批量扫描面板](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
 
 ---
 
