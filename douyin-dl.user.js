@@ -1,18 +1,18 @@
 // ==UserScript==
-// @name            抖音下载 (V1.0.7 )
-// @namespace       https://github.com/zhzLuke96/douyin-dl-user-js
-// @version         1.0.7
-// @description     V1.0.7：修复批量管理器选择/检查器同步、管理器与胶囊互斥、任务封面、设置窗口裁切；恢复一级下载记录入口；新增状态悬浮信息与作者作品一次性完整扫描/全选。
-// @author          小辉同學 & ChatGPT
-// @match           https://*.douyin.com/*
-// @icon            data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTE1MWMiLz48cGF0aCBkPSJNMTcgMTdoMTFjMTEgMCAxOCA1IDE4IDE1cy03IDE1LTE4IDE1SDE3em0xMCAyM2M3IDAgMTAtMiAxMC04cy0zLTgtMTAtOGgtMnYxNnoiIGZpbGw9IiM4ZmE3ZmYiLz48L3N2Zz4=
-// @license         MIT
-// @require         https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js
-// @grant           GM_xmlhttpRequest
-// @grant           GM_download
-// @grant           unsafeWindow
-// @connect         *
-// ==/UserScript==
+// @name         抖音网页版增强下载工具
+// @namespace    https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
+// @version      1.0.7
+// @description  抖音网页版增强下载工具，支持无水印视频下载、图集打包、字幕导出及作者主页批量扫描下载。
+// @author       小辉同學
+// @match        https://*.douyin.com/*
+// @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTE1MWMiLz48cGF0aCBkPSJNMTcgMTdoMTFjMTEgMCAxOCA1IDE4IDE1cy03IDE1LTE4IDE1SDE3em0xMCAyM2M3IDAgMTAtMiAxMC04cy0zLTgtMTAtOGgtMnYxNnoiIGZpbGw9IiM4ZmE3ZmYiLz48L3N2Zz4=
+// @license      MIT
+// @require      https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js
+// @grant        GM_xmlhttpRequest
+// @grant        GM_download
+// @grant        unsafeWindow
+// @connect      *
+// ==UserScript==
 
 const requires = this;
 
