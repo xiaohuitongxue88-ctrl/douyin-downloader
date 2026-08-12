@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          抖音网页版增强下载工具
 // @namespace     https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
-// @version       1.0.9
+// @version       1.0.10
 // @description   基于开源项目 douyin-dl-user-js 的稳定增强维护版；支持无水印视频、图集批量下载、原声音频提取、弹幕 ASS 导出、作者主页批量任务及断点恢复。
 // @author        小辉同學
 // @match         https://*.douyin.com/*
@@ -212,6 +212,697 @@ const requires = this;
     };
   }
 
+
+  // =============================================================================
+  // 项目支持
+  // =============================================================================
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const ProjectSupport = {
+    STORAGE_KEY: "dy-dl.project-support.v1",
+    SESSION_GAP_MS: 30 * 60 * 1000,
+    IDLE_DELAY_MS: 10 * 1000,
+
+    GREASYFORK_URL:
+      "https://greasyfork.org/zh-CN/scripts/589949/feedback",
+    GITHUB_URL:
+      "https://github.com/xiaohuitongxue88-ctrl/douyin-downloader",
+
+    STAGES: Object.freeze([
+      Object.freeze({
+        minAgeMs: 3 * DAY_MS,
+        minSessions: 3,
+        minSuccess: 5,
+        minFeatures: 2,
+        minGapMs: 0,
+      }),
+      Object.freeze({
+        minAgeMs: 14 * DAY_MS,
+        minSessions: 10,
+        minSuccess: 25,
+        minFeatures: 3,
+        minGapMs: 10 * DAY_MS,
+      }),
+      Object.freeze({
+        minAgeMs: 45 * DAY_MS,
+        minSessions: 25,
+        minSuccess: 80,
+        minFeatures: 3,
+        minGapMs: 30 * DAY_MS,
+      }),
+    ]),
+
+    panel: null,
+    eligibilityTimer: 0,
+    passiveFeatureTimes: new Map(),
+
+    defaultState() {
+      return {
+        firstSeenAt: Date.now(),
+        lastSessionAt: 0,
+        sessionCount: 0,
+        successCount: 0,
+        featureFlags: [],
+        promptCount: 0,
+        lastPromptAt: 0,
+        actionClicked: false,
+      };
+    },
+
+    loadState() {
+      const fallback = this.defaultState();
+
+      try {
+        const raw = localStorage.getItem(this.STORAGE_KEY);
+        if (!raw) {
+          this.saveState(fallback);
+          return fallback;
+        }
+
+        const parsed = JSON.parse(raw);
+        const state = {
+          ...fallback,
+          ...(parsed && typeof parsed === "object" ? parsed : {}),
+        };
+
+        state.firstSeenAt =
+          Number.isFinite(Number(state.firstSeenAt)) &&
+          Number(state.firstSeenAt) > 0
+            ? Number(state.firstSeenAt)
+            : fallback.firstSeenAt;
+        state.lastSessionAt = Math.max(
+          0,
+          Number(state.lastSessionAt || 0)
+        );
+        state.sessionCount = Math.max(
+          0,
+          Number(state.sessionCount || 0)
+        );
+        state.successCount = Math.max(
+          0,
+          Number(state.successCount || 0)
+        );
+        state.promptCount = Math.max(
+          0,
+          Number(state.promptCount || 0)
+        );
+        state.lastPromptAt = Math.max(
+          0,
+          Number(state.lastPromptAt || 0)
+        );
+        state.actionClicked = Boolean(state.actionClicked);
+        state.featureFlags = Array.isArray(state.featureFlags)
+          ? state.featureFlags
+              .map((item) => String(item || "").trim())
+              .filter(Boolean)
+          : [];
+
+        return state;
+      } catch {
+        return fallback;
+      }
+    },
+
+    saveState(state) {
+      try {
+        localStorage.setItem(
+          this.STORAGE_KEY,
+          JSON.stringify(state)
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    init() {
+      if (!document.body) return;
+      const state = this.loadState();
+      this.scheduleIfEligible(state);
+    },
+
+    recordSuccess(feature, options = {}) {
+      const featureName = String(feature || "").trim();
+      if (!featureName) return;
+
+      const now = Date.now();
+      const cooldownMs = Math.max(
+        0,
+        Number(options.cooldownMs || 0)
+      );
+
+      if (cooldownMs > 0) {
+        const last = Number(
+          this.passiveFeatureTimes.get(featureName) || 0
+        );
+
+        if (now - last < cooldownMs) {
+          return;
+        }
+
+        this.passiveFeatureTimes.set(featureName, now);
+      }
+
+      const state = this.loadState();
+      if (state.actionClicked) return;
+
+      state.successCount =
+        Math.max(0, Number(state.successCount || 0)) + 1;
+
+      const features = new Set(state.featureFlags || []);
+      features.add(featureName);
+      state.featureFlags = Array.from(features);
+
+      const lastSessionAt =
+        Number(state.lastSessionAt || 0);
+
+      if (
+        !lastSessionAt ||
+        now - lastSessionAt >= this.SESSION_GAP_MS
+      ) {
+        state.sessionCount =
+          Math.max(0, Number(state.sessionCount || 0)) + 1;
+        state.lastSessionAt = now;
+      }
+
+      this.saveState(state);
+      this.scheduleIfEligible(state);
+    },
+
+    getCurrentStage(state) {
+      const index = Math.max(
+        0,
+        Number(state?.promptCount || 0)
+      );
+
+      return this.STAGES[index] || null;
+    },
+
+    isEligible(state) {
+      if (!state || state.actionClicked) return false;
+
+      const stage = this.getCurrentStage(state);
+      if (!stage) return false;
+
+      const now = Date.now();
+      const featureCount = new Set(
+        state.featureFlags || []
+      ).size;
+
+      if (
+        now - Number(state.firstSeenAt || now) <
+        stage.minAgeMs
+      ) {
+        return false;
+      }
+
+      if (
+        Number(state.sessionCount || 0) <
+        stage.minSessions
+      ) {
+        return false;
+      }
+
+      if (
+        Number(state.successCount || 0) <
+        stage.minSuccess
+      ) {
+        return false;
+      }
+
+      if (featureCount < stage.minFeatures) {
+        return false;
+      }
+
+      const lastPromptAt =
+        Number(state.lastPromptAt || 0);
+
+      if (
+        stage.minGapMs > 0 &&
+        lastPromptAt > 0 &&
+        now - lastPromptAt < stage.minGapMs
+      ) {
+        return false;
+      }
+
+      return true;
+    },
+
+    isSafeMoment() {
+      if (!document.body || document.hidden) {
+        return false;
+      }
+
+      if (document.fullscreenElement) {
+        return false;
+      }
+
+      // 作者页已有右下角批量面板，避免两个浮层争夺同一区域。
+      if (isProfilePagePath()) {
+        return false;
+      }
+
+      const active = document.activeElement;
+      if (
+        active instanceof Element &&
+        (
+          active.matches(
+            "input,textarea,select,[contenteditable='true'],[role='textbox']"
+          ) ||
+          active.closest(
+            "input,textarea,select,[contenteditable='true'],[role='textbox']"
+          )
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        document.querySelector(
+          ".dy-dl-product-dialog-overlay-v106," +
+          ".dy-dl-modal-overlay-v1"
+        )
+      ) {
+        return false;
+      }
+
+      const taskCenter = document.querySelector(
+        ".dy-dl-task-center-v106:not([hidden])"
+      );
+
+      if (
+        taskCenter &&
+        !["completed", "submitted"].includes(
+          taskCenter.dataset.phase || ""
+        )
+      ) {
+        return false;
+      }
+
+      return true;
+    },
+
+    scheduleIfEligible(state) {
+      if (!this.isEligible(state)) return;
+      if (this.panel || this.eligibilityTimer) return;
+
+      this.eligibilityTimer = setTimeout(() => {
+        this.eligibilityTimer = 0;
+
+        const fresh = this.loadState();
+        if (!this.isEligible(fresh)) return;
+        if (!this.isSafeMoment()) return;
+
+        this.show();
+      }, this.IDLE_DELAY_MS);
+    },
+
+    ensureStyle() {
+      if (
+        document.getElementById(
+          "dy-dl-project-support-style-v1"
+        )
+      ) {
+        return;
+      }
+
+      const style = document.createElement("style");
+      style.id = "dy-dl-project-support-style-v1";
+      style.textContent = `
+        #dy-dl-project-support-v1 {
+          position: fixed;
+          right: 16px;
+          bottom: 16px;
+          z-index: 2147483645;
+
+          box-sizing: border-box;
+          width: min(328px, calc(100vw - 32px));
+          padding: 14px;
+
+          border: 1px solid #e4e4e7;
+          border-radius: 10px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, .10);
+
+          color: #18181b;
+          font-family:
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            "Microsoft YaHei",
+            sans-serif;
+          text-align: left;
+        }
+
+        #dy-dl-project-support-v1,
+        #dy-dl-project-support-v1 * {
+          box-sizing: border-box;
+        }
+
+        #dy-dl-project-support-v1 .dy-dl-support-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+          margin: 0 0 8px;
+        }
+
+        #dy-dl-project-support-v1 .dy-dl-support-title {
+          min-width: 0;
+          padding-top: 3px;
+          color: #18181b;
+          font-size: 15px;
+          font-weight: 600;
+          line-height: 1.3;
+          letter-spacing: -.01em;
+        }
+
+        #dy-dl-project-support-v1 .dy-dl-support-close {
+          flex: 0 0 auto;
+          width: 28px;
+          height: 28px;
+          padding: 0;
+          border: 1px solid transparent;
+          border-radius: 6px;
+          background: transparent;
+          color: #71717a;
+          font: inherit;
+          font-size: 18px;
+          font-weight: 400;
+          line-height: 1;
+          cursor: pointer;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-close:hover,
+        #dy-dl-project-support-v1
+          .dy-dl-support-close:focus-visible {
+          border-color: #e4e4e7;
+          background: #f4f4f5;
+          color: #18181b;
+          outline: none;
+        }
+
+        #dy-dl-project-support-v1 .dy-dl-support-copy {
+          color: #52525b;
+          font-size: 12.5px;
+          font-weight: 400;
+          line-height: 1.55;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-copy p {
+          margin: 0 0 8px;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-copy p:last-child {
+          margin-bottom: 0;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-copy strong {
+          color: #18181b;
+          font-weight: 600;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-actions {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 118px;
+          gap: 8px;
+          margin-top: 12px;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-action {
+          min-width: 0;
+          min-height: 36px;
+          padding: 7px 10px;
+          border-radius: 8px;
+          font: inherit;
+          font-size: 12.5px;
+          font-weight: 500;
+          line-height: 1.2;
+          cursor: pointer;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-primary {
+          border: 1px solid #18181b;
+          background: #18181b;
+          color: #fafafa;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-primary:hover,
+        #dy-dl-project-support-v1
+          .dy-dl-support-primary:focus-visible {
+          border-color: #27272a;
+          background: #27272a;
+          outline: none;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-secondary {
+          border: 1px solid #d4d4d8;
+          background: #ffffff;
+          color: #18181b;
+        }
+
+        #dy-dl-project-support-v1
+          .dy-dl-support-secondary:hover,
+        #dy-dl-project-support-v1
+          .dy-dl-support-secondary:focus-visible {
+          border-color: #a1a1aa;
+          background: #f4f4f5;
+          outline: none;
+        }
+
+        @media (prefers-color-scheme: dark) {
+          #dy-dl-project-support-v1 {
+            border-color: #27272a;
+            background: #18181b;
+            box-shadow:
+              0 8px 24px rgba(0, 0, 0, .28);
+            color: #fafafa;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-title,
+          #dy-dl-project-support-v1
+            .dy-dl-support-copy strong {
+            color: #fafafa;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-copy {
+            color: #d4d4d8;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-close {
+            color: #a1a1aa;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-close:hover,
+          #dy-dl-project-support-v1
+            .dy-dl-support-close:focus-visible {
+            border-color: #3f3f46;
+            background: #27272a;
+            color: #fafafa;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-primary {
+            border-color: #fafafa;
+            background: #fafafa;
+            color: #18181b;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-primary:hover,
+          #dy-dl-project-support-v1
+            .dy-dl-support-primary:focus-visible {
+            border-color: #e4e4e7;
+            background: #e4e4e7;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-secondary {
+            border-color: #3f3f46;
+            background: #18181b;
+            color: #fafafa;
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-secondary:hover,
+          #dy-dl-project-support-v1
+            .dy-dl-support-secondary:focus-visible {
+            border-color: #52525b;
+            background: #27272a;
+          }
+        }
+
+        @media (max-width: 420px) {
+          #dy-dl-project-support-v1 {
+            right: 10px;
+            bottom: 10px;
+            width: calc(100vw - 20px);
+          }
+
+          #dy-dl-project-support-v1
+            .dy-dl-support-actions {
+            grid-template-columns: 1fr;
+          }
+        }
+      `;
+
+      (document.head || document.documentElement)
+        .appendChild(style);
+    },
+
+    openExternal(url) {
+      if (!document.body) return;
+
+      const link = document.createElement("a");
+      link.href = String(url || "");
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.style.display = "none";
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    },
+
+    markActionClicked() {
+      const state = this.loadState();
+      state.actionClicked = true;
+      this.saveState(state);
+    },
+
+    removePanel() {
+      if (this.panel?.isConnected) {
+        this.panel.remove();
+      }
+      this.panel = null;
+    },
+
+    show() {
+      if (!document.body || this.panel) return;
+
+      const state = this.loadState();
+      if (!this.isEligible(state)) return;
+      if (!this.isSafeMoment()) return;
+
+      state.promptCount =
+        Math.max(0, Number(state.promptCount || 0)) + 1;
+      state.lastPromptAt = Date.now();
+      this.saveState(state);
+
+      this.ensureStyle();
+
+      const panel = document.createElement("section");
+      panel.id = "dy-dl-project-support-v1";
+      panel.setAttribute("role", "region");
+      panel.setAttribute(
+        "aria-label",
+        "支持项目持续维护"
+      );
+
+      panel.innerHTML = `
+        <div class="dy-dl-support-head">
+          <div class="dy-dl-support-title">
+            支持项目持续维护
+          </div>
+
+          <button
+            type="button"
+            class="dy-dl-support-close"
+            aria-label="关闭本次提示"
+            title="关闭"
+          >×</button>
+        </div>
+
+        <div class="dy-dl-support-copy">
+          <p>
+            如果 <strong>抖音网页版增强下载工具</strong>
+            对你的实际使用有所帮助，欢迎留下真实评价或为项目添加 GitHub Star。
+          </p>
+
+          <p>
+            <strong>
+              你的好评、Star 和推荐，是我持续更新、修复兼容问题和开发新功能的重要动力。
+            </strong>
+          </p>
+
+          <p>
+            长期缺少真实反馈和社区支持，也意味着项目的持续需求有限，
+            后续维护和新功能开发可能相应减少。
+          </p>
+        </div>
+
+        <div class="dy-dl-support-actions">
+          <button
+            type="button"
+            class="dy-dl-support-action dy-dl-support-primary"
+            data-dy-dl-support="greasyfork"
+          >
+            提交 Greasy Fork 评价
+          </button>
+
+          <button
+            type="button"
+            class="dy-dl-support-action dy-dl-support-secondary"
+            data-dy-dl-support="github"
+          >
+            GitHub Star
+          </button>
+        </div>
+      `;
+
+      panel
+        .querySelector(".dy-dl-support-close")
+        ?.addEventListener(
+          "click",
+          () => this.removePanel(),
+          { once: true }
+        );
+
+      panel
+        .querySelector(
+          '[data-dy-dl-support="greasyfork"]'
+        )
+        ?.addEventListener(
+          "click",
+          () => {
+            this.markActionClicked();
+            this.openExternal(this.GREASYFORK_URL);
+            this.removePanel();
+          },
+          { once: true }
+        );
+
+      panel
+        .querySelector(
+          '[data-dy-dl-support="github"]'
+        )
+        ?.addEventListener(
+          "click",
+          () => {
+            this.markActionClicked();
+            this.openExternal(this.GITHUB_URL);
+            this.removePanel();
+          },
+          { once: true }
+        );
+
+      document.body.appendChild(panel);
+      this.panel = panel;
+    },
+  };
 
   // =============================================================================
   // 产品级确认/信息对话框
@@ -4028,7 +4719,7 @@ const requires = this;
   const ABOUT_PANEL_CONTENT = Object.freeze({
     title: "抖音下载 · 关于 / 需求反馈",
     subtitle: "稳定增强维护版",
-    version: "V1.0.9",
+    version: "V1.0.10",
 
     // ---- 项目与联系信息 ----
     maintainer: "小辉同學",
@@ -5486,6 +6177,49 @@ const requires = this;
       readAuthorNumber(profile, null, AUTHOR_FAVORITE_KEYS) != null;
 
     /**
+     * 作者统计最终取值策略。
+     *
+     * 作品播放器中的 authorInfo 可能是页面级缓存、精简对象或占位统计；
+     * 作者主页资料接口/主页预载数据更接近当前主页展示，因此只要远程补取成功，
+     * 就优先使用远程统计。远程不可用时仍回退到作品原始数据，避免功能退化。
+     */
+    const resolveAuthorStats = (author, media, fetchedProfile) => {
+      const remoteFollowerCount = readAuthorNumber(
+        fetchedProfile,
+        null,
+        AUTHOR_FOLLOWER_KEYS
+      );
+      const remoteTotalFavorited = readAuthorNumber(
+        fetchedProfile,
+        null,
+        AUTHOR_FAVORITE_KEYS
+      );
+      const baseFollowerCount = readAuthorNumber(
+        author,
+        media,
+        AUTHOR_FOLLOWER_KEYS
+      );
+      const baseTotalFavorited = readAuthorNumber(
+        author,
+        media,
+        AUTHOR_FAVORITE_KEYS
+      );
+
+      return {
+        followerCount: remoteFollowerCount ?? baseFollowerCount,
+        totalFavorited: remoteTotalFavorited ?? baseTotalFavorited,
+      };
+    };
+
+    /**
+     * 有 SecUID 时按需刷新作者主页统计。
+     * 真正的请求去重由 10 分钟缓存负责，因此这里不依赖播放器携带的统计是否
+     * “看起来完整”，避免 0 / 旧缓存值阻止真实主页统计的补取。
+     */
+    const shouldRefreshAuthorStats = (secUid) =>
+      Boolean(String(secUid || "").trim());
+
+    /**
      * 合并不同数据通道返回的作者资料。
      *
      * 抖音有时会把 user 与 statistics 分开放置，或在接口降级时只返回一项
@@ -5521,6 +6255,40 @@ const requires = this;
     };
 
     /**
+     * 解析作者主页可见的紧凑数字，例如 100.0万 / 2.0亿 / 2400。
+     * 仅作为主页 HTML 已有文本的最后兜底，不额外发起请求。
+     */
+    const parseCompactAuthorCount = (value) => {
+      const text = String(value ?? "")
+        .trim()
+        .replace(/,/g, "")
+        .replace(/\+$/g, "");
+      const match = text.match(/^(\d+(?:\.\d+)?)(万|亿)?$/);
+      if (!match) return null;
+      const base = Number(match[1]);
+      if (!Number.isFinite(base)) return null;
+      const multiplier = match[2] === "亿" ? 100000000 : match[2] === "万" ? 10000 : 1;
+      return Math.round(base * multiplier);
+    };
+
+    const selectAuthorStatsFromText = (text) => {
+      const source = String(text || "").replace(/\s+/g, " ").trim();
+      if (!source) return null;
+      const token = "(\\d+(?:\\.\\d+)?(?:万|亿)?\\+?)";
+      const readLabel = (label) => {
+        // 抖音主页语义顺序为“标签 → 数值”（例如“粉丝 100.0万”）。
+        // 不使用“数值 → 标签”兜底，避免把前一项“关注 20”的 20 误判为粉丝数。
+        const match = source.match(new RegExp(`${label}\\s*${token}`));
+        return parseCompactAuthorCount(match?.[1]);
+      };
+      const followerCount = readLabel("粉丝");
+      const totalFavorited = readLabel("获赞");
+      return followerCount != null || totalFavorited != null
+        ? { followerCount, totalFavorited }
+        : null;
+    };
+
+    /**
      * 从接口或页面预载 JSON 中寻找作者统计对象。
      * 只做有深度和节点上限的遍历，避免处理异常大对象时占用过多资源。
      */
@@ -5528,7 +6296,31 @@ const requires = this;
       if (!payload || typeof payload !== "object") return null;
 
       const expectedId = String(secUid || "");
-      const queue = [{ value: payload, depth: 0 }];
+      const readIdentity = (value) => {
+        if (!value || typeof value !== "object") return "";
+        const direct =
+          value.secUid ||
+          value.sec_uid ||
+          value.secUserId ||
+          value.sec_user_id ||
+          "";
+        if (direct) return String(direct);
+
+        for (const key of ["user", "userInfo", "user_info", "author", "authorInfo", "author_info"]) {
+          const child = value[key];
+          const nested =
+            child?.secUid ||
+            child?.sec_uid ||
+            child?.secUserId ||
+            child?.sec_user_id ||
+            "";
+          if (nested) return String(nested);
+        }
+        return "";
+      };
+
+      const rootOwnerId = readIdentity(payload);
+      const queue = [{ value: payload, depth: 0, ownerId: rootOwnerId }];
       const seen = new Set();
       let cursor = 0;
       let visited = 0;
@@ -5540,49 +6332,55 @@ const requires = this;
       let bestFavoriteScore = -1;
 
       while (cursor < queue.length && visited < 2500) {
-        const { value, depth } = queue[cursor++];
+        const { value, depth, ownerId: inheritedOwnerId } = queue[cursor++];
         if (!value || typeof value !== "object" || seen.has(value)) continue;
         seen.add(value);
         visited++;
 
-        const followerCount = readAuthorNumber(value, null, AUTHOR_FOLLOWER_KEYS);
-        const totalFavorited = readAuthorNumber(
-          value,
-          null,
-          AUTHOR_FAVORITE_KEYS
-        );
-        const candidateId = String(
+        const directId = String(
           value.secUid ||
             value.sec_uid ||
             value.secUserId ||
             value.sec_user_id ||
             ""
         );
+        const inferredId = directId || readIdentity(value) || inheritedOwnerId || "";
+        const followerCount = readAuthorNumber(value, null, AUTHOR_FOLLOWER_KEYS);
+        const totalFavorited = readAuthorNumber(
+          value,
+          null,
+          AUTHOR_FAVORITE_KEYS
+        );
 
         if (followerCount != null || totalFavorited != null) {
-          const idMatches = expectedId && candidateId === expectedId;
-          const idConflicts = expectedId && candidateId && candidateId !== expectedId;
-          let score = followerCount != null && totalFavorited != null ? 12 : 5;
-          if (idMatches) score += 30;
-          if (idConflicts) score -= 30;
-          if (value.nickname || value.nickName || value.uid) score += 3;
-          score -= depth * 0.2;
+          const idMatches = expectedId && inferredId === expectedId;
+          const idConflicts = expectedId && inferredId && inferredId !== expectedId;
+          const hasVerifiedOwner = !expectedId || idMatches;
 
-          if (followerCount != null && score > bestFollowerScore) {
-            bestFollowerScore = score;
-            bestFollower = followerCount;
-          }
-          if (totalFavorited != null && score > bestFavoriteScore) {
-            bestFavoriteScore = score;
-            bestFavorite = totalFavorited;
-          }
-          if (score > bestScore) {
-            bestScore = score;
-            best = { ...value };
+          // 指定作者时，不吸收无归属聚合统计或明确属于其他作者的数据。
+          if (!idConflicts && hasVerifiedOwner) {
+            let score = followerCount != null && totalFavorited != null ? 12 : 5;
+            if (idMatches) score += 30;
+            if (value.nickname || value.nickName || value.uid) score += 3;
+            score -= depth * 0.2;
+
+            if (followerCount != null && score > bestFollowerScore) {
+              bestFollowerScore = score;
+              bestFollower = followerCount;
+            }
+            if (totalFavorited != null && score > bestFavoriteScore) {
+              bestFavoriteScore = score;
+              bestFavorite = totalFavorited;
+            }
+            if (score > bestScore) {
+              bestScore = score;
+              best = { ...value };
+            }
           }
         }
 
         if (depth >= 8) continue;
+        const nextOwnerId = directId || readIdentity(value) || inheritedOwnerId || "";
         const priorityKeys = [
           "user",
           "userInfo",
@@ -5598,13 +6396,13 @@ const requires = this;
         for (const key of priorityKeys) {
           const child = value[key];
           if (child && typeof child === "object") {
-            queue.push({ value: child, depth: depth + 1 });
+            queue.push({ value: child, depth: depth + 1, ownerId: nextOwnerId });
             pushed.add(child);
           }
         }
         for (const child of Array.isArray(value) ? value : Object.values(value)) {
           if (child && typeof child === "object" && !pushed.has(child)) {
-            queue.push({ value: child, depth: depth + 1 });
+            queue.push({ value: child, depth: depth + 1, ownerId: nextOwnerId });
           }
         }
       }
@@ -5909,6 +6707,20 @@ const requires = this;
             } catch {}
           }
         }
+
+        // JSON 结构变化时，最后读取作者主页已经渲染出的“粉丝 / 获赞”文本。
+        // 只截取页面前部，降低误匹配作品正文并限制字符串扫描成本。
+        const visibleText = String(page.body?.textContent || "").slice(0, 20000);
+        const textStats = selectAuthorStatsFromText(visibleText);
+        collectedProfile = mergeAuthorProfiles(collectedProfile, textStats);
+        if (hasCompleteAuthorStats(collectedProfile)) {
+          authorProfileCache.set(key, {
+            data: collectedProfile,
+            savedAt: Date.now(),
+          });
+          return collectedProfile;
+        }
+
         lastError = new Error(
           collectedProfile
             ? "作者主页仅返回部分统计"
@@ -5951,11 +6763,7 @@ const requires = this;
       );
 
       useEffect(() => {
-        if (
-          !author ||
-          !secUid ||
-          (baseFollowerCount != null && baseTotalFavorited != null)
-        ) {
+        if (!author || !shouldRefreshAuthorStats(secUid)) {
           return undefined;
         }
 
@@ -6016,12 +6824,9 @@ const requires = this;
 
       const fetchedProfile =
         profileState.secUid === secUid ? profileState.data : null;
-      const followerCount =
-        baseFollowerCount ??
-        readAuthorNumber(fetchedProfile, null, AUTHOR_FOLLOWER_KEYS);
-      const totalFavorited =
-        baseTotalFavorited ??
-        readAuthorNumber(fetchedProfile, null, AUTHOR_FAVORITE_KEYS);
+      const resolvedStats = resolveAuthorStats(author, media, fetchedProfile);
+      const followerCount = resolvedStats.followerCount;
+      const totalFavorited = resolvedStats.totalFavorited;
       const needsRemoteStats =
         followerCount == null || totalFavorited == null;
       const retryProfile = () => {
@@ -7997,6 +8802,10 @@ const requires = this;
         ToastCenter.update(result?.message || "原声音频下载失败，请稍后重试", 2600);
       }
 
+      if (result?.completed || result?.submitted) {
+        ProjectSupport.recordSuccess("original-audio");
+      }
+
       return result;
     }
 
@@ -8301,6 +9110,7 @@ const requires = this;
       ) {
         this._singleRetryContext = null;
         DownloadProgressCenter.setRetry(null);
+        ProjectSupport.recordSuccess("media-download");
         return result;
       }
 
@@ -8408,6 +9218,8 @@ const requires = this;
         />`,
         modal.root
       );
+
+      ProjectSupport.recordSuccess("media-details");
     }
     async open_config_modal(initialTab = "settings") {
       // V1.0.7：设置中心统一由外层控制响应式尺寸，内部仅负责左右栏布局。
@@ -9595,6 +10407,13 @@ const requires = this;
         this.emit("stateChanged", this);
         this.emit("countsUpdated", this.getCounts());
         this._publishTaskCenter();
+
+        if (!cancelled && known > 0) {
+          ProjectSupport.recordSuccess(
+            "profile-scan",
+            { cooldownMs: 10 * 60 * 1000 }
+          );
+        }
       }
     }
 
@@ -10180,6 +10999,17 @@ const requires = this;
             resumeAvailable: failure?.resumeAvailable,
             unavailable: failure?.unavailable,
           });
+        }
+
+        if (
+          result?.completed ||
+          result?.submitted ||
+          result?.mixed
+        ) {
+          ProjectSupport.recordSuccess(
+            "batch-download",
+            { cooldownMs: 5 * 60 * 1000 }
+          );
         }
 
         this.currentRun.processed++;
@@ -11021,7 +11851,7 @@ const requires = this;
           },
           {
             label: "下载弹幕",
-            callback: () => {
+            callback: async () => {
               this.mediaHandler.refresh_player();
               if (!this.mediaHandler.player) {
                 ToastCenter.update("暂未读取到播放器，请先播放视频后再导出弹幕", 2400);
@@ -11039,7 +11869,8 @@ const requires = this;
                 this.mediaHandler.current_media
               );
               const blob = new Blob([content], { type: "text/plain" });
-              this.downloader.download_blob(blob, `${filename}.ass`);
+              await this.downloader.download_blob(blob, `${filename}.ass`);
+              ProjectSupport.recordSuccess("danmaku-export");
             },
           },
           {
@@ -12295,8 +13126,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   mediaHandler.init(); // Starts player detection
   domPatcher.startObserving(); // Starts DOM observation and initial scan
   profilePageHandler.mount_ui();
+  ProjectSupport.init();
 
   hotkeyManager.addHotkey("m", () => mediaHandler.download_current_media());
   // #endregion
-  console.log("[dy-dl] V1.0.9 稳定增强版已启动");
+  console.log("[dy-dl] V1.0.10 稳定增强版已启动");
 })();

@@ -16,7 +16,7 @@
 </div>
 
 > [!IMPORTANT]
-> 当前稳定版本为 **v1.0.9**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录后再提交问题。
+> 当前稳定版本为 **v1.0.10**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录后再提交问题。
 
 ## ✨ 项目简介
 
@@ -43,15 +43,14 @@ Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。
 - 功能面板与原网页保持相对独立，尽量减少对抖音原有操作的干扰。
 - 支持快捷键 `M`，快速下载当前媒体。
 
-## 🆕 v1.0.9 更新亮点
+## 🆕 v1.0.10 更新亮点
 
-- 新增独立的原声音频提取与下载入口。
-- 优化作者信息读取，并增加按需请求与短时缓存。
-- 修复批量管理器选择状态与检查器不同步的问题。
-- 修复管理器与悬浮胶囊互斥、任务封面和设置窗口裁切问题。
-- 恢复一级下载记录入口，并新增任务状态悬浮信息。
-- 新增作者作品一次性完整扫描与快速全选。
-- 优化关于页信息层级、项目仓库与开源来源说明。
+- 修复作者信息页粉丝数量可能显示旧值、占位值或不准确数据的问题。
+- 强化作者 SecUID 归属校验，避免其他作者或无归属统计覆盖当前作者信息。
+- 优化作者主页统计补取与 10 分钟短时缓存，减少重复请求。
+- 增加作者主页已渲染粉丝数、获赞数的兼容兜底，提升网页结构调整后的可用性。
+- 全面复核单视频、图集、原声音频、弹幕 ASS、作者主页扫描、批量任务、暂停恢复与媒体详情等关键代码路径。
+- 保持低资源运行策略，不新增常驻轮询或持续动画。
 
 ## 📸 界面预览
 
@@ -87,7 +86,7 @@ Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。
 
 ### 第二步：安装脚本
 
-点击 [**立即安装 Douyin Downloader**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js)，Tampermonkey 打开安装页面后，确认版本为 `1.0.9`，再点击“安装”。
+点击 [**立即安装 Douyin Downloader**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js)，Tampermonkey 打开安装页面后，确认版本为 `1.0.10`，再点击“安装”。
 
 ### 第三步：开始使用
 
