@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name          抖音网页版增强下载工具
 // @namespace     https://github.com/xiaohuitongxue88-ctrl/douyin-downloader
-// @version       1.0.10
-// @description   基于开源项目 douyin-dl-user-js 的稳定增强维护版；支持无水印视频、图集批量下载、原声音频提取、弹幕 ASS 导出、作者主页批量任务及断点恢复。
+// @version       1.0.11
+// @description   抖音网页版增强下载工具；支持无水印视频、高清图集、原声音频、弹幕字幕、作者主页批量下载、任务暂停恢复与媒体地址自动恢复。
 // @author        小辉同學
 // @match         https://*.douyin.com/*
 // @icon          data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTE1MWMiLz48cGF0aCBkPSJNMTcgMTdoMTFjMTEgMCAxOCA1IDE4IDE1cy03IDE1LTE4IDE1SDE3em0xMCAyM2M3IDAgMTAtMiAxMC04cy0zLTgtMTAtOGgtMnYxNnoiIGZpbGw9IiM4ZmE3ZmYiLz48L3N2Zz4=
 // @license       MIT
+// @supportURL    https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues
 // @require       https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.umd.js
 // @run-at        document-idle
 // @noframes
@@ -94,6 +95,49 @@ const requires = this;
     );
   };
 
+  /**
+   * 将页面作品标题转换为适合 Windows 文件系统的“视觉等价标题”。
+   *
+   * - 已识别的话题标签从主标题中移除，避免 hashtags 抢占文件名长度。
+   * - Windows 禁止字符转换为对应全角字符，尽可能保持页面标题观感。
+   * - 只处理文件名表现，不改媒体元数据本身。
+   *
+   * @param {string} value
+   * @param {string[]} [tagList=[]]
+   * @returns {string}
+   */
+  const sanitizeWorkTitleForFilename = (value, tagList = []) => {
+    let title = String(value ?? "").replace(/\s+/g, " ").trim();
+
+    for (const tag of tagList || []) {
+      const safeTag = String(tag || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!safeTag) continue;
+      title = title.replace(new RegExp(`#${safeTag}\\s*`, "g"), " ");
+    }
+
+    const fullWidthReplacement = Object.freeze({
+      "\\": "＼",
+      "/": "／",
+      ":": "：",
+      "*": "＊",
+      "?": "？",
+      '"': "＂",
+      "<": "＜",
+      ">": "＞",
+      "|": "｜",
+    });
+
+    title = Array.from(title, (char) => {
+      const code = char.charCodeAt(0);
+      if (code <= 31 || code === 127) return "";
+      return fullWidthReplacement[char] || char;
+    }).join("");
+
+    title = title.replace(/\s+/g, " ").trim().replace(/[. ]+$/g, "");
+    return title || "douyin_media";
+  };
+  // #endregion filename title
+
   /** 获取并校验 @require 注入的 Preact 运行时。 */
   const getHtmPreact = () => {
     const runtime = requires?.htmPreact;
@@ -170,6 +214,7 @@ const requires = this;
       el.className = "dy-dl-toast dy-dl-toast-v1";
       el.setAttribute("role", "status");
       el.setAttribute("aria-live", "polite");
+      el.innerHTML = `<span class="dy-dl-toast-dot-v112" aria-hidden="true"></span><span class="dy-dl-toast-text-v112"></span>`;
       document.body.appendChild(el);
       this.el = el;
       return el;
@@ -184,8 +229,18 @@ const requires = this;
         this.timer = null;
       }
 
-      el.textContent = String(message || "");
-      el.style.display = "block";
+      const text = String(message || "");
+      const tone = /失败|错误|不可用|异常|拒绝/.test(text)
+        ? "error"
+        : /警告|等待|暂停|可能|重试/.test(text)
+        ? "warning"
+        : /成功|完成|已保存|已复制|已发送|已恢复|已创建/.test(text)
+        ? "success"
+        : "info";
+      el.dataset.tone = tone;
+      const textNode = el.querySelector(".dy-dl-toast-text-v112");
+      if (textNode) textNode.textContent = text;
+      el.style.display = "flex";
 
       if (duration > 0) {
         this.timer = setTimeout(() => {
@@ -935,6 +990,7 @@ const requires = this;
         overlay.className = "dy-dl-product-dialog-overlay-v106";
         overlay.innerHTML = `
           <section class="dy-dl-product-dialog-v106" role="dialog" aria-modal="true" aria-labelledby="dy-dl-dialog-title-v106">
+            <button type="button" class="dy-dl-product-dialog-close-v112" aria-label="关闭" data-dy-tooltip="关闭">${iconMarkup("close")}</button>
             <div class="dy-dl-product-dialog-icon-v106">${iconMarkup(icon)}</div>
             <div class="dy-dl-product-dialog-copy-v106">
               <h3 id="dy-dl-dialog-title-v106"></h3>
@@ -953,6 +1009,7 @@ const requires = this;
         const primary = overlay.querySelector(".dy-dl-product-dialog-primary-v106");
         const secondary = overlay.querySelector(".dy-dl-product-dialog-secondary-v106");
         const iconEl = overlay.querySelector(".dy-dl-product-dialog-icon-v106");
+        const closeButton = overlay.querySelector(".dy-dl-product-dialog-close-v112");
 
         titleEl.textContent = String(title || "提示");
         messageEl.textContent = String(message || "");
@@ -983,6 +1040,7 @@ const requires = this;
 
         primary.addEventListener("click", () => finish(true));
         secondary.addEventListener("click", () => finish(false));
+        closeButton?.addEventListener("click", () => finish(false));
         overlay.addEventListener("click", (event) => {
           if (event.target === overlay) finish(false);
         });
@@ -1053,30 +1111,35 @@ const requires = this;
    * SVG 使用 currentColor，具体颜色由各按钮 CSS 控制。
    */
   const UI_ICONS = Object.freeze({
-    download: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>`,
-    downloadCloud: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 13v8"/><path d="m8 17 4 4 4-4"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/><path d="M16 13H8"/></svg>`,
-    package: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
-    settings: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
-    chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`,
-    chevronUp: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>`,
-    list: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m18 9 3 3-3 3"/></svg>`,
-    listChecks: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m17 9 2 2 4-4"/><path d="m17 15 2 2 4-4"/></svg>`,
-    search: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
-    filter: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18"/><path d="M7 12h10"/><path d="M10 20h4"/></svg>`,
-    pause: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/></svg>`,
-    play: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>`,
-    retry: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`,
-    cancel: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`,
-    close: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
-    success: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
-    warning: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`,
-    error: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>`,
-    info: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
-    folder: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
-    send: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>`,
-    history: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>`,
-    scan: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
-    image: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
+    download: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>`,
+    downloadCloud: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 13v8"/><path d="m8 17 4 4 4-4"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/><path d="M16 13H8"/></svg>`,
+    package: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
+    settings: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
+    chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`,
+    chevronUp: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>`,
+    list: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m18 9 3 3-3 3"/></svg>`,
+    listChecks: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="m17 9 2 2 4-4"/><path d="m17 15 2 2 4-4"/></svg>`,
+    search: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+    filter: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18"/><path d="M7 12h10"/><path d="M10 20h4"/></svg>`,
+    pause: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/></svg>`,
+    play: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>`,
+    retry: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`,
+    cancel: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>`,
+    close: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+    success: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+    warning: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`,
+    error: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>`,
+    info: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+    folder: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+    send: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>`,
+    history: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>`,
+    scan: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
+    pin: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M5 17h14"/><path d="M6 3h12l-2 7 3 3H5l3-3Z"/></svg>`,
+    pinOff: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 2 20 20"/><path d="M12 17v5"/><path d="M5 17h12"/><path d="m6 3 2 7-3 3h8"/><path d="M16 3h2l-1.35 4.73"/></svg>`,
+    music: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    subtitles: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 13h4"/><path d="M15 13h2"/><path d="M7 9h2"/><path d="M13 9h4"/><rect width="20" height="14" x="2" y="5" rx="2"/></svg>`,
+    messageSquare: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/></svg>`,
+    image: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
   });
 
   const iconMarkup = (name, className = "") => {
@@ -1119,6 +1182,7 @@ const requires = this;
     lastPayload: null,
     view: "capsule",
     pointerInside: false,
+    pinned: false,
     kind: "single",
 
     ensure() {
@@ -1142,7 +1206,10 @@ const requires = this;
               <strong class="dy-dl-task-title-v106">下载任务</strong>
               <span class="dy-dl-task-method-v106"></span>
             </div>
-            <button type="button" class="dy-dl-icon-btn-v106 dy-dl-task-minimize-v106" aria-label="缩小进度卡" title="缩小">${iconMarkup("chevronDown")}</button>
+            <div class="dy-dl-task-head-actions-v112">
+              <button type="button" class="dy-dl-icon-btn-v106 dy-dl-task-pin-v112" aria-label="固定任务面板" data-dy-tooltip="固定面板">${iconMarkup("pin")}</button>
+              <button type="button" class="dy-dl-icon-btn-v106 dy-dl-task-minimize-v106" aria-label="缩小进度卡" data-dy-tooltip="最小化">${iconMarkup("chevronDown")}</button>
+            </div>
           </header>
 
           <div class="dy-dl-task-state-row-v106">
@@ -1182,6 +1249,7 @@ const requires = this;
         eta: root.querySelector(".dy-dl-task-eta-v106"),
         cancel: root.querySelector(".dy-dl-task-cancel-v106"),
         minimize: root.querySelector(".dy-dl-task-minimize-v106"),
+        pin: root.querySelector(".dy-dl-task-pin-v112"),
         retry: root.querySelector(".dy-dl-task-retry-v106"),
       };
 
@@ -1201,6 +1269,33 @@ const requires = this;
         }
       });
       this.nodes.minimize.addEventListener("click", () => this.minimize());
+      this.nodes.pin?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.togglePinned();
+      });
+
+      const taskCenterOutsidePointerDown = (event) => {
+        if (!root.isConnected) {
+          document.removeEventListener("pointerdown", taskCenterOutsidePointerDown, true);
+          document.removeEventListener("keydown", taskCenterKeyDown, true);
+          return;
+        }
+        if (this.view !== "expanded" || this.pinned) return;
+        if (root.contains(event.target)) return;
+        this.minimize();
+      };
+      const taskCenterKeyDown = (event) => {
+        if (event.key === "Escape" && this.view === "expanded") {
+          event.preventDefault();
+          this.pinned = false;
+          root.dataset.pinned = "false";
+          this.minimize();
+        }
+      };
+      document.addEventListener("pointerdown", taskCenterOutsidePointerDown, true);
+      document.addEventListener("keydown", taskCenterKeyDown, true);
+
       this.nodes.cancel.addEventListener("click", () => this.cancelHandler?.());
       this.nodes.retry.addEventListener("click", () => {
         const handler = this.retryHandler;
@@ -1253,12 +1348,36 @@ const requires = this;
       this.nodes.retry.innerHTML = `${iconMarkup(iconName)}<span>${this.retryLabel}</span>`;
     },
 
+    togglePinned(force) {
+      const root = this.ensure();
+      if (!root) return;
+      this.pinned = typeof force === "boolean" ? force : !this.pinned;
+      root.dataset.pinned = String(this.pinned);
+      if (this.nodes.pin) {
+        this.nodes.pin.innerHTML = iconMarkup(this.pinned ? "pinOff" : "pin");
+        this.nodes.pin.setAttribute("aria-label", this.pinned ? "取消固定任务面板" : "固定任务面板");
+        this.nodes.pin.dataset.dyTooltip = this.pinned ? "取消固定" : "固定面板";
+      }
+      if (this.pinned) {
+        clearTimeout(this.collapseTimer);
+      } else {
+        this._scheduleAutoCollapse();
+      }
+    },
+
     minimize() {
       const root = this.ensure();
       if (!root) return;
+      this.pinned = false;
+      root.dataset.pinned = "false";
       this.view = "capsule";
       root.dataset.view = "capsule";
       clearTimeout(this.collapseTimer);
+      if (this.nodes.pin) {
+        this.nodes.pin.innerHTML = iconMarkup("pin");
+        this.nodes.pin.setAttribute("aria-label", "固定任务面板");
+        this.nodes.pin.dataset.dyTooltip = "固定面板";
+      }
     },
 
     expand() {
@@ -1278,7 +1397,15 @@ const requires = this;
     hide() {
       clearTimeout(this.hideTimer);
       clearTimeout(this.collapseTimer);
-      if (this.root) this.root.hidden = true;
+      this.pinned = false;
+      if (this.root) {
+        this.root.hidden = true;
+        this.root.dataset.pinned = "false";
+      }
+      if (this.nodes.pin) {
+        this.nodes.pin.innerHTML = iconMarkup("pin");
+        this.nodes.pin.dataset.dyTooltip = "固定面板";
+      }
       this.lastPayload = null;
       this.setCancel(null);
       this.setRetry(null);
@@ -1288,6 +1415,7 @@ const requires = this;
       const phase = this.lastPayload?.phase || "";
       if (
         this.kind === "batch" ||
+        this.pinned ||
         this.collapseTimer ||
         this.pointerInside ||
         this.view !== "expanded" ||
@@ -1449,7 +1577,9 @@ const requires = this;
         this.minimize();
         return;
       }
-      this.hideTimer = setTimeout(() => this.hide(), payload.batch ? 5000 : 3000);
+      if (!this.pinned) {
+        this.hideTimer = setTimeout(() => this.hide(), payload.batch ? 5000 : 3000);
+      }
     },
   };
 
@@ -2046,7 +2176,7 @@ const requires = this;
 
   // #region 主题样式
   /**
-   * Graphite Cobalt（石墨钴蓝）设计系统。
+   * 统一交互骨架 + 商务科技视觉设计系统。
    *
    * 设计原则：
    * - 与抖音原生红色体系明显区分；
@@ -2058,34 +2188,34 @@ const requires = this;
    */
   const theme = {
     colors: {
-      primary: "#5B7CFA",
-      primaryHover: "#6E8CFF",
-      primaryLight: "#9AAEFF",
-      primaryPressed: "#4968DD",
-      primarySoft: "#18213E",
-      primaryBorder: "#344B8E",
+      primary: "#22C7D8",
+      primaryHover: "#35D7E7",
+      primaryLight: "#76E4EE",
+      primaryPressed: "#14AFC0",
+      primarySoft: "#102A2E",
+      primaryBorder: "#245A61",
 
-      bgBase: "#0B0E13",
-      bgOverlay: "#11151C",
-      bgNav: "#141922",
-      bgFieldset: "#171C25",
-      bgControl: "#1E2530",
-      bgHover: "#252D39",
+      bgBase: "#0D0F10",
+      bgOverlay: "#111315",
+      bgNav: "#121518",
+      bgFieldset: "#17191C",
+      bgControl: "#1B1E22",
+      bgHover: "#20242A",
 
-      borderLight: "#2B3441",
-      borderMedium: "#3B4656",
-      borderInput: "#424C5A",
+      borderLight: "#24272B",
+      borderMedium: "#32363C",
+      borderInput: "#3B4047",
 
-      textPrimary: "#F4F7FB",
-      textSecondary: "#B2BBC8",
-      textMuted: "#7F8998",
-      textDim: "#596270",
+      textPrimary: "#E6E7E9",
+      textSecondary: "#B9BCC2",
+      textMuted: "#8B8E94",
+      textDim: "#62666D",
 
-      success: "#36B887",
-      warning: "#D9A347",
-      danger: "#DF6670",
-      info: "#58A0FF",
-      paused: "#A58BC8",
+      success: "#22C55E",
+      warning: "#EAB308",
+      danger: "#F0525E",
+      info: "#7C8CFF",
+      paused: "#A78BFA",
     },
     spacing: {
       xs: "4px",
@@ -2097,19 +2227,19 @@ const requires = this;
       xxxl: "32px",
     },
     borderRadius: {
-      sm: "8px",
-      md: "12px",
-      lg: "16px",
+      sm: "6px",
+      md: "8px",
+      lg: "10px",
       full: "999px",
     },
     fontSize: {
-      xs: "12px",
-      sm: "13px",
-      md: "14px",
-      lg: "18px",
+      xs: "11px",
+      sm: "12px",
+      md: "13px",
+      lg: "16px",
     },
     shadow: {
-      panel: "0 12px 36px rgba(0,0,0,.34)",
+      panel: "0 18px 42px rgba(0,0,0,.34)",
     },
   };
   // #endregion
@@ -2230,8 +2360,10 @@ const requires = this;
 
   // #region 配置管理
   class Config {
+    static legacyDefaultFilenameTemplate = "`${nickname}_${short_id}_${tags}_${desc}`";
     static defaults = {
-      filename_template: "`${nickname}_${short_id}_${tags}_${desc}`",
+      // 默认以页面作品标题作为文件名主体；作者、短 ID、hashtags 不再抢占标题长度。
+      filename_template: "`${desc}`",
     };
     static global = new Config();
 
@@ -2259,7 +2391,7 @@ const requires = this;
       /**
        * 最大文件名长度
        */
-      filename_max_length: 64,
+      filename_max_length: 120,
       /**
        * 视频下载编码偏好
        *
@@ -2370,10 +2502,27 @@ const requires = this;
     load() {
       if (localStorage.getItem(this._key)) {
         const data = JSON.parse(localStorage.getItem(this._key));
+        const storedFilenameTemplate = data.features?.filename_template;
+        const storedFilenameMaxLength = data.features?.filename_max_length;
+
         this.features = {
           ...this.features,
           ...data.features,
         };
+
+        // V1.0.11：仅迁移“旧默认文件名模板”。
+        // 用户自己修改过模板时保持原设置，不进行覆盖。
+        if (
+          storedFilenameTemplate === Config.legacyDefaultFilenameTemplate
+        ) {
+          this.features.filename_template = Config.defaults.filename_template;
+          if (
+            storedFilenameMaxLength === undefined ||
+            Number(storedFilenameMaxLength) === 64
+          ) {
+            this.features.filename_max_length = 120;
+          }
+        }
 
         // V1.0.0：旧 convert_webp_to_png 已由 image_convert_codecs 完全取代。
         delete this.features.convert_webp_to_png;
@@ -4719,7 +4868,7 @@ const requires = this;
   const ABOUT_PANEL_CONTENT = Object.freeze({
     title: "抖音下载 · 关于 / 需求反馈",
     subtitle: "稳定增强维护版",
-    version: "V1.0.10",
+    version: "V1.0.11",
 
     // ---- 项目与联系信息 ----
     maintainer: "小辉同學",
@@ -7552,7 +7701,7 @@ const requires = this;
                 className=${classNames.inputBase}
                 value=${filenameTemplate}
                 onInput=${(e) => setFilenameTemplate(e.target.value)}
-                placeholder=${`例：\${nickname}_\${short_id}`}
+                placeholder=${`默认：\${desc}`}
               />
             </div>
             <div className=${classNames.hintText} style="margin-top: 5px;">
@@ -8030,16 +8179,16 @@ const requires = this;
     const styles = {
       panel: ({ expanded }) => css({
         position: "fixed",
-        right: "24px",
-        bottom: "78px",
+        right: "18px",
+        bottom: "72px",
         zIndex: 999999,
-        width: expanded ? "292px" : "auto",
+        width: expanded ? "316px" : "auto",
         maxWidth: "calc(100vw - 32px)",
-        fontFamily: 'system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif',
+        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif',
         color: theme.colors.textPrimary,
       }),
       shell: css({
-        padding: "16px",
+        padding: "14px",
         border: `1px solid ${theme.colors.borderLight}`,
         borderRadius: theme.borderRadius.lg,
         background: theme.colors.bgOverlay,
@@ -8047,7 +8196,7 @@ const requires = this;
       }),
       head: css({ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }),
       heading: css({ minWidth: 0 }),
-      title: css({ margin: 0, fontSize: "14px", fontWeight: 700, lineHeight: 1.3 }),
+      title: css({ margin: 0, fontSize: "13px", fontWeight: 600, lineHeight: 1.3 }),
       author: css({ marginTop: "4px", color: theme.colors.textMuted, fontSize: "12px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }),
       iconButton: css({
         width: "30px", height: "30px", display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -8059,10 +8208,10 @@ const requires = this;
       }),
       stat: css({ padding: "10px 11px", border: `1px solid ${theme.colors.borderLight}`, borderRadius: "10px", background: theme.colors.bgFieldset }),
       statLabel: css({ color: theme.colors.textMuted, fontSize: "11px" }),
-      statValue: css({ marginTop: "3px", fontSize: "16px", fontWeight: 700, fontVariantNumeric: "tabular-nums" }),
+      statValue: css({ marginTop: "3px", fontSize: "15px", fontWeight: 600, fontVariantNumeric: "tabular-nums lining-nums" }),
       primary: css({
         width: "100%", minHeight: "38px", marginTop: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px",
-        border: "none", borderRadius: "9px", background: theme.colors.primary, color: "#fff", fontSize: "13px", fontWeight: 650, cursor: "pointer",
+        border: "none", borderRadius: "9px", background: theme.colors.primary, color: "#0D0F10", fontSize: "12px", fontWeight: 600, cursor: "pointer",
       }),
       secondaryRow: css({ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }),
       secondary: css({
@@ -8077,9 +8226,10 @@ const requires = this;
         fontSize: "11px", cursor: "pointer",
       }),
       plugin: css({
-        minHeight: "34px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "0 13px",
-        border: `1px solid ${theme.colors.primaryBorder}`, borderRadius: "9px", background: theme.colors.primarySoft,
-        color: "#8FA7FF", fontSize: "13px", fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 24px rgba(0,0,0,.28)",
+        width: "42px", height: "42px", minHeight: "42px", display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 0,
+        border: `1px solid ${theme.colors.borderMedium}`, borderRadius: "10px", background: theme.colors.bgOverlay,
+        color: theme.colors.primary, cursor: "pointer", boxShadow: theme.shadow.panel,
+        '& svg': { width: "18px", height: "18px" },
       }),
     };
 
@@ -8109,7 +8259,7 @@ const requires = this;
       const pause = () => manager.stopJob();
 
       if (!expanded) {
-        return html`<div class=${styles.panel({ expanded: false })}><button type="button" class=${styles.plugin} onClick=${expand} title="打开抖音媒体工作台">${icon("download")}<span>插件</span></button></div>`;
+        return html`<div class=${styles.panel({ expanded: false })}><button type="button" class=${styles.plugin} onClick=${expand} aria-label="打开媒体工作台" data-dy-tooltip="媒体工作台">${icon("download")}</button></div>`;
       }
 
       return html`
@@ -8117,8 +8267,8 @@ const requires = this;
           <div class=${styles.shell}>
             <header class=${styles.head}>
               <div class=${styles.heading}>
-                <h3 class=${styles.title}>批量下载</h3>
-                <div class=${styles.author}>${snapshot.profileName || "当前作者"}</div>
+                <h3 class=${styles.title}>媒体工作台</h3>
+                <div class=${styles.author}>${snapshot.profileName || "当前作者"} · 批量下载</div>
               </div>
               <button type="button" class=${styles.iconButton} onClick=${collapse} title="收起面板" aria-label="收起批量下载面板">${icon("chevronDown")}</button>
             </header>
@@ -8229,6 +8379,205 @@ const requires = this;
     }
   }
 
+
+  // #region V1.0.11 Passive Media Evidence Mesh / Self-Healing
+  const RecentMediaJournal = {
+    maxEntries: 64,
+    items: [],
+
+    routeKey() {
+      return `${location.pathname}${location.search}`;
+    },
+
+    routeAwemeId() {
+      return location.pathname.match(/\/(?:video|note)\/(\d+)/)?.[1] || "";
+    },
+
+    record(rawUrl, source = "UNKNOWN", meta = {}) {
+      const url = String(rawUrl || "").trim();
+      if (!url || !PassiveMediaEvidence.looksMediaUrl(url)) return;
+
+      const at = Date.now();
+      const routeKey = this.routeKey();
+      const awemeId = String(meta.awemeId || "");
+      const last = this.items[this.items.length - 1];
+      if (last && last.url === url && last.source === source && last.routeKey === routeKey && last.awemeId === awemeId && at - last.at < 800) {
+        last.at = at;
+        return;
+      }
+
+      this.items.push({ url, source, routeKey, awemeId, at });
+      if (this.items.length > this.maxEntries) {
+        this.items.splice(0, this.items.length - this.maxEntries);
+      }
+    },
+
+    candidates(expectedAwemeId = "", maxAgeMs = 20000) {
+      const routeKey = this.routeKey();
+      const routeAwemeId = this.routeAwemeId();
+      const cutoff = Date.now() - maxAgeMs;
+      return this.items.filter((item) => {
+        if (item.routeKey !== routeKey || item.at < cutoff) return false;
+        if (!expectedAwemeId) return true;
+        if (item.awemeId) return item.awemeId === expectedAwemeId;
+        return routeAwemeId === expectedAwemeId;
+      });
+    },
+
+    bestUrl(expectedAwemeId = "") {
+      return this.candidates(expectedAwemeId).slice().reverse().find((item) => item.url)?.url || "";
+    },
+  };
+
+  const PassiveMediaEvidence = {
+    observer: null,
+    started: false,
+
+    looksMediaUrl(raw) {
+      const value = String(raw || "").toLowerCase();
+      if (!/^https?:/.test(value)) return false;
+      return /\.(?:mp4|m4s|m3u8)(?:[?#]|$)/i.test(value) ||
+        value.includes("mime_type=video") ||
+        value.includes("video_id=") ||
+        value.includes("/video/tos/") ||
+        value.includes("/aweme/v1/play/") ||
+        value.includes("douyinvod") ||
+        value.includes("bytev") ||
+        value.includes("video-qn");
+    },
+
+    record(rawUrl, source = "PASSIVE", meta = {}) {
+      RecentMediaJournal.record(rawUrl, source, meta);
+    },
+
+    captureMedia(media, source = "PLAYER_DATA") {
+      if (!media) return;
+      const awemeId = String(media.awemeId || "");
+      const video = media.video || {};
+      const urls = [];
+      if (video.playApi) urls.push(video.playApi);
+      if (video.playApiH265) urls.push(video.playApiH265);
+      if (Array.isArray(video.playAddr)) urls.push(...video.playAddr.map((x) => x?.src));
+      if (Array.isArray(video.bitRateList)) {
+        for (const item of video.bitRateList) {
+          if (item?.playApi) urls.push(item.playApi);
+          if (Array.isArray(item?.playAddr)) urls.push(...item.playAddr.map((x) => x?.src));
+        }
+      }
+      for (const url of urls.filter(Boolean)) this.record(url, source, { awemeId });
+    },
+
+    scanRecent() {
+      try {
+        const entries = performance.getEntriesByType("resource");
+        const start = Math.max(0, entries.length - 160);
+        for (let index = start; index < entries.length; index++) {
+          const entry = entries[index];
+          if (entry?.name && this.looksMediaUrl(entry.name)) this.record(entry.name, "PERF_HISTORY");
+        }
+      } catch (error) {
+        console.debug("[dy-dl]Resource Timing 回看不可用", error);
+      }
+    },
+
+    scanVideo(video, source = "MEDIA_ELEMENT") {
+      if (!(video instanceof HTMLVideoElement)) return;
+      if (video.currentSrc) this.record(video.currentSrc, source);
+      if (video.src) this.record(video.src, source);
+      for (const node of video.querySelectorAll("source[src]")) {
+        if (node.src) this.record(node.src, source);
+      }
+    },
+
+    start() {
+      if (this.started) return;
+      this.started = true;
+      this.scanRecent();
+      const onMedia = (event) => this.scanVideo(event.target, "MEDIA_ELEMENT");
+      document.addEventListener("loadedmetadata", onMedia, true);
+      document.addEventListener("play", onMedia, true);
+
+      try {
+        if (typeof PerformanceObserver === "function") {
+          this.observer = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if (entry?.name && this.looksMediaUrl(entry.name)) this.record(entry.name, "PERF_LIVE");
+            }
+          });
+          this.observer.observe({ type: "resource", buffered: false });
+        }
+      } catch (error) {
+        console.debug("[dy-dl]只读网络旁路不可用，继续使用播放器数据", error);
+      }
+
+      setTimeout(() => {
+        document.querySelectorAll("video").forEach((video) => this.scanVideo(video, "MEDIA_EXISTING"));
+      }, 800);
+    },
+  };
+
+  const MediaSelfHealing = {
+    breaker: new Map(),
+
+    routeAwemeId() {
+      return RecentMediaJournal.routeAwemeId();
+    },
+
+    allowAttempt(awemeId) {
+      const key = `${RecentMediaJournal.routeKey()}|${awemeId}`;
+      const now = Date.now();
+      const previous = this.breaker.get(key) || { count: 0, firstAt: now };
+      if (now - previous.firstAt > 10000) {
+        this.breaker.set(key, { count: 1, firstAt: now });
+        return true;
+      }
+      if (previous.count >= 3) return false;
+      previous.count += 1;
+      this.breaker.set(key, previous);
+      return true;
+    },
+
+    buildRecoveredMedia(baseMedia, url, awemeId) {
+      if (!url || !awemeId) return null;
+      const base = baseMedia && typeof baseMedia === "object" ? baseMedia : {};
+      return {
+        ...base,
+        awemeId,
+        desc: base.desc || document.title || "douyin_media",
+        shareInfo: { ...(base.shareInfo || {}), shareUrl: base.shareInfo?.shareUrl || location.href },
+        authorInfo: { nickname: "douyin", ...(base.authorInfo || {}) },
+        video: {
+          ...(base.video || {}),
+          playApi: url,
+          playAddr: [{ src: url }],
+          bitRateList: [],
+        },
+      };
+    },
+
+    recoverCurrent(handler, expectedAwemeId = "", options = {}) {
+      const expected = String(expectedAwemeId || this.routeAwemeId() || handler?.current_media?.awemeId || "");
+      const current = handler?.current_media || null;
+      if (!options.forcePassive && current?.awemeId && (!expected || current.awemeId === expected)) return current;
+      if (!expected) return current;
+      if (!this.allowAttempt(expected)) {
+        console.debug("[dy-dl]媒体自愈已短时熔断，避免重复恢复", expected);
+        return current?.awemeId === expected ? current : null;
+      }
+
+      const url = RecentMediaJournal.bestUrl(expected);
+      if (!url) return current?.awemeId === expected ? current : null;
+
+      const recovered = this.buildRecoveredMedia(current?.awemeId === expected ? current : null, url, expected);
+      if (recovered && handler) {
+        handler.current_media = recovered;
+        ToastCenter.update("已自动恢复当前媒体地址", 1800);
+      }
+      return recovered;
+    },
+  };
+  // #endregion
+
   // #region 主入口组件 ---
   /**
    * 这个类是主要逻辑
@@ -8273,8 +8622,8 @@ const requires = this;
     /**
      * 文件名
      *
-     * [nickname] + [short_id] + [tags] + [desc]
-     * max length: 64
+     * 默认使用作品标题 [desc]；用户仍可在设置中自定义 nickname / short_id / tags 等模板变量。
+     * 默认 max length: 120
      *
      * @param {import("./types").DouyinMedia.MediaRoot} media
      */
@@ -8299,12 +8648,7 @@ const requires = this;
       const tag_list =
         textExtra?.map((x) => x.hashtagName).filter(Boolean) || [];
       const tags = tag_list.map((x) => "#" + x).join("_");
-      let rawDesc = desc || "";
-      tag_list.forEach((t) => {
-        const safeTag = String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        rawDesc = rawDesc.replace(new RegExp(`#${safeTag}\\s*`, "g"), "");
-      });
-      rawDesc = rawDesc.trim().replace(/[#/?<>\\:*|":]/g, ""); // Sanitize illegal characters
+      const rawDesc = sanitizeWorkTitleForFilename(desc, tag_list);
 
       // 渲染文件名用的上下文
       const context = {
@@ -8360,6 +8704,7 @@ const requires = this;
     _update_current_media_from_player() {
       if (this.player?.config?.awemeInfo) {
         this.current_media = this.player.config.awemeInfo;
+        PassiveMediaEvidence.captureMedia(this.current_media, "PLAYER_DATA");
         return this.current_media;
       }
       return null;
@@ -8430,7 +8775,17 @@ const requires = this;
         this._update_current_media_from_player();
       }
 
+      PassiveMediaEvidence.captureMedia(this.current_media, "PLAYER_DATA");
       return this.player;
+    }
+
+    async ensure_current_media(expectedAwemeId = "", options = {}) {
+      this.refresh_player();
+      const expected = String(expectedAwemeId || MediaSelfHealing.routeAwemeId() || this.current_media?.awemeId || "");
+      if (!options.forcePassive && this.current_media?.awemeId && (!expected || this.current_media.awemeId === expected)) {
+        return this.current_media;
+      }
+      return MediaSelfHealing.recoverCurrent(this, expected, options);
     }
 
     _flag_start_download() {
@@ -8794,11 +9149,18 @@ const requires = this;
         return { ok: false, reason: "audio_download_failed", error };
       }
 
+      if (result?.cancelled) {
+        // “正在获取原声音频”使用 duration=0 常驻显示；用户主动取消后必须
+        // 显式替换为有限时长状态，否则 Toast 会一直残留在播放器上方。
+        ToastCenter.update("已取消原声下载", 1400);
+        return result;
+      }
+
       if (result?.completed) {
         ToastCenter.update("原声已保存", 1800);
       } else if (result?.submitted) {
         ToastCenter.update("原声下载任务已提交", 2200);
-      } else if (!result?.cancelled) {
+      } else {
         ToastCenter.update(result?.message || "原声音频下载失败，请稍后重试", 2600);
       }
 
@@ -8917,16 +9279,15 @@ const requires = this;
           if (refreshed?.awemeId) return refreshed;
         }
 
-        // 单视频页面兜底：按需刷新当前播放器中的 awemeInfo。
+        // 单视频页面兜底：按需刷新当前播放器中的 awemeInfo；
+        // 若播放器对象仍是过期地址，则只在当前详情路由匹配 awemeId 时使用被动网络证据自愈。
         this.refresh_player();
-        if (
-          this.current_media?.awemeId &&
-          this.current_media.awemeId === media.awemeId
-        ) {
-          return this.current_media;
+        if (this.current_media?.awemeId === media.awemeId) {
+          const passive = MediaSelfHealing.recoverCurrent(this, media.awemeId, { forcePassive: true });
+          return passive || this.current_media;
         }
 
-        return null;
+        return MediaSelfHealing.recoverCurrent(this, media.awemeId, { forcePassive: true });
       };
 
       if (isAlbum) {
@@ -9073,9 +9434,7 @@ const requires = this;
     }
 
     async _download_current_media_logic() {
-      this.refresh_player();
-
-      const mediaSnapshot = this.current_media;
+      const mediaSnapshot = await this.ensure_current_media();
       const recoveryContext =
         this._singleRetryContext || null;
 
@@ -9094,11 +9453,7 @@ const requires = this;
           batch: false,
           recoveryContext,
           refreshMedia: async () => {
-            this.refresh_player();
-            return this.current_media?.awemeId ===
-              mediaSnapshot?.awemeId
-              ? this.current_media
-              : null;
+            return await this.ensure_current_media(mediaSnapshot?.awemeId || "", { forcePassive: true });
           },
         }
       );
@@ -9255,155 +9610,242 @@ const requires = this;
   // #endregion
 
   // #region TooltipsButton
+  const PLUGIN_HOVER_OPEN_DELAY = 500;
+
   class TooltipsButton {
     /**
-     * 播放器右下角“插件”菜单。
+     * 播放器右下角媒体工具入口。
      *
-     * V1.0.1 修复：
-     * - 不再完全依赖抖音 xgplayer 自己的 hover 行为；
-     * - 自己维护 open 状态；
-     * - 菜单 pointer-events 强制可用；
-     * - 菜单项点击时阻断播放器父层事件，避免“看得到但点不中”。
-     *
-     * NOTE: dy-dl-video-btn 用于标记是否已经注入。
+     * 交互采用低干扰浮动入口、渐进展开与明确状态反馈：
+     * - Mini 图标入口，避免长期占用播放器控制条；
+     * - Hover 约 500ms 打开，点击立即 Toggle；
+     * - Popup 内部点击不关闭；外部点击关闭；Esc 关闭；
+     * - 可 Pin，Pin 后外部点击不关闭；
+     * - 二级动作执行时，Pin 状态下保持面板；
+     * - document 级监听在节点脱离 DOM 后自动清理。
      */
-    static _html_base = (that) => html`
+    static _html_base = () => html`
       <xg-icon
         class="xgplayer-playclarity-setting dy-dl-video-btn"
         data-state="normal"
         data-index="11"
       >
         <div class="gear isSmoothSwitchClarityLogin dy-dl-plugin-gear-v101">
-          <div class="virtual dy-dl-plugin-menu-v101"></div>
-          <div class="btn dy-dl-plugin-trigger-v101" tabindex="0" role="button" aria-label="打开插件菜单"></div>
+          <div class="virtual dy-dl-plugin-menu-v101" role="dialog" aria-label="媒体工具">
+            <header class="dy-dl-plugin-menu-head-v112">
+              <div class="dy-dl-plugin-menu-heading-v112">
+                <span class="dy-dl-plugin-status-dot-v112" data-tone="idle"></span>
+                <div>
+                  <strong>当前作品</strong>
+                  <span class="dy-dl-plugin-status-text-v112">等待读取媒体</span>
+                </div>
+              </div>
+              <div class="dy-dl-plugin-menu-actions-v112">
+                <button type="button" class="dy-dl-plugin-head-btn-v112 dy-dl-plugin-pin-v112" aria-label="固定面板" data-dy-tooltip="固定面板">${iconMarkup("pin")}</button>
+                <button type="button" class="dy-dl-plugin-head-btn-v112 dy-dl-plugin-close-v112" aria-label="关闭面板" data-dy-tooltip="关闭">${iconMarkup("close")}</button>
+              </div>
+            </header>
+            <div class="dy-dl-plugin-menu-body-v112"></div>
+          </div>
+          <div class="btn dy-dl-plugin-trigger-v101 dy-dl-plugin-trigger-mini-v112" tabindex="0" role="button" aria-label="媒体工具" aria-expanded="false" data-dy-tooltip="媒体工具"></div>
         </div>
       </xg-icon>
     `;
 
-    /**
-     * @param {string} label
-     * @param {{label?: string, callback?: Function, html?: string, render?: Function}[]} items
-     * @param {Function} onclick
-     */
-    constructor(label, items, onclick) {
+    constructor(label, items, onclick, options = {}) {
       this.label = label;
       this.items = items;
       this.onclick = onclick;
+      this.options = options || {};
     }
 
     render() {
       const root = DOMPatcher.render_html(TooltipsButton._html_base(this));
-
-      /** @type {HTMLElement} */
       const gear = root.querySelector(".dy-dl-plugin-gear-v101");
       const itemsList = root.querySelector(".dy-dl-plugin-menu-v101");
+      const itemsBody = root.querySelector(".dy-dl-plugin-menu-body-v112");
       const button = root.querySelector(".dy-dl-plugin-trigger-v101");
+      const pinButton = root.querySelector(".dy-dl-plugin-pin-v112");
+      const closeButton = root.querySelector(".dy-dl-plugin-close-v112");
+      const statusDot = root.querySelector(".dy-dl-plugin-status-dot-v112");
+      const statusText = root.querySelector(".dy-dl-plugin-status-text-v112");
 
       if (button) {
-        button.innerHTML = `${iconMarkup("download", "dy-dl-plugin-trigger-icon-v105")}<span>${this.label || "插件"}</span>`;
-        button.title = "打开插件菜单";
+        button.innerHTML = iconMarkup("download", "dy-dl-plugin-trigger-icon-v105");
+        button.dataset.dyTooltip = this.label || "媒体工具";
       }
 
+      let openTimer = 0;
       let closeTimer = 0;
+      let pinned = false;
 
+      const clearOpenTimer = () => {
+        if (!openTimer) return;
+        clearTimeout(openTimer);
+        openTimer = 0;
+      };
       const clearCloseTimer = () => {
-        if (closeTimer) {
-          clearTimeout(closeTimer);
-          closeTimer = 0;
+        if (!closeTimer) return;
+        clearTimeout(closeTimer);
+        closeTimer = 0;
+      };
+      const updateStatus = () => {
+        const state = this.options.getStatus?.() || {};
+        const label = state.label || "媒体工具已就绪";
+        const tone = ["success", "warning", "error", "info"].includes(state.tone)
+          ? state.tone
+          : "idle";
+        if (statusText) statusText.textContent = label;
+        if (statusDot) statusDot.dataset.tone = tone;
+      };
+      const openMenu = () => {
+        clearOpenTimer();
+        clearCloseTimer();
+        updateStatus();
+        gear?.classList.add("dy-dl-plugin-open-v101");
+        root?.classList.add("dy-dl-plugin-open-v101", "dy-dl-plugin-active-v112");
+        button?.setAttribute("aria-expanded", "true");
+      };
+      const closeMenu = (force = false) => {
+        clearOpenTimer();
+        clearCloseTimer();
+        if (pinned && !force) return;
+        if (force) pinned = false;
+        gear?.classList.remove("dy-dl-plugin-open-v101", "dy-dl-plugin-pinned-v112");
+        root?.classList.remove("dy-dl-plugin-open-v101", "dy-dl-plugin-active-v112");
+        button?.setAttribute("aria-expanded", "false");
+        if (pinButton) {
+          pinButton.innerHTML = iconMarkup("pin");
+          pinButton.dataset.dyTooltip = "固定面板";
+          pinButton.setAttribute("aria-label", "固定面板");
         }
       };
-
-      const openMenu = () => {
+      const scheduleOpen = () => {
         clearCloseTimer();
-        gear?.classList.add("dy-dl-plugin-open-v101");
-        root?.classList.add("dy-dl-plugin-open-v101");
+        if (gear?.classList.contains("dy-dl-plugin-open-v101")) return;
+        clearOpenTimer();
+        openTimer = setTimeout(() => {
+          openTimer = 0;
+          openMenu();
+        }, PLUGIN_HOVER_OPEN_DELAY);
       };
-
-      const closeMenu = () => {
-        clearCloseTimer();
-        gear?.classList.remove("dy-dl-plugin-open-v101");
-        root?.classList.remove("dy-dl-plugin-open-v101");
-      };
-
       const scheduleClose = () => {
+        clearOpenTimer();
+        if (pinned) return;
         clearCloseTimer();
-        closeTimer = setTimeout(closeMenu, 180);
+        closeTimer = setTimeout(() => closeMenu(false), 180);
+      };
+      const togglePin = () => {
+        pinned = !pinned;
+        gear?.classList.toggle("dy-dl-plugin-pinned-v112", pinned);
+        if (pinButton) {
+          pinButton.innerHTML = iconMarkup(pinned ? "pinOff" : "pin");
+          pinButton.dataset.dyTooltip = pinned ? "取消固定" : "固定面板";
+          pinButton.setAttribute("aria-label", pinned ? "取消固定面板" : "固定面板");
+        }
+        if (pinned) openMenu();
       };
 
-      // 鼠标在按钮/菜单之间移动时保持菜单打开。
-      gear?.addEventListener("mouseenter", openMenu);
+      gear?.addEventListener("mouseenter", scheduleOpen);
       gear?.addEventListener("mouseleave", scheduleClose);
-      itemsList?.addEventListener("mouseenter", openMenu);
+      itemsList?.addEventListener("mouseenter", () => {
+        clearOpenTimer();
+        clearCloseTimer();
+      });
       itemsList?.addEventListener("mouseleave", scheduleClose);
 
-      // 防止 xgplayer 控制条抢走菜单项的 pointer/mouse/click。
       for (const eventName of ["pointerdown", "mousedown", "mouseup"]) {
-        itemsList?.addEventListener(eventName, (event) => {
-          event.stopPropagation();
-        });
+        itemsList?.addEventListener(eventName, (event) => event.stopPropagation());
       }
 
-      // 渲染菜单项
       for (const item of this.items) {
         if (item.html) {
           const element = DOMPatcher.render_html(item.html);
           element.classList.add("dy-dl-plugin-item-v101");
-          itemsList.appendChild(element);
+          itemsBody?.appendChild(element);
           continue;
         }
-
         if (item.render) {
           const element = item.render();
           element?.classList?.add("dy-dl-plugin-item-v101");
-          itemsList.appendChild(element);
+          itemsBody?.appendChild(element);
           continue;
         }
 
+        const icon = item.icon ? iconMarkup(item.icon, "dy-dl-plugin-item-icon-v112") : "";
         const menuItem = DOMPatcher.render_html(
-          `<div class="item dy-dl-plugin-item-v101" role="button" tabindex="0">${item.label}</div>`
+          `<div class="item dy-dl-plugin-item-v101${item.primary ? " dy-dl-plugin-item-primary-v112" : ""}" role="button" tabindex="0">${icon}<span>${item.label}</span></div>`
         );
-
         const activate = (event) => {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
-
-          closeMenu();
-
+          if (!pinned) closeMenu(false);
           try {
             item.callback?.(event);
           } catch (error) {
             console.error("[dy-dl]插件菜单执行失败：", error);
-            createToast(null, "操作失败，请查看控制台");
+            ToastCenter.update("操作失败，请查看控制台", 2400);
           }
         };
-
         menuItem.addEventListener("click", activate);
         menuItem.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            activate(event);
-          }
+          if (event.key === "Enter" || event.key === " ") activate(event);
         });
-
-        itemsList.appendChild(menuItem);
+        itemsBody?.appendChild(menuItem);
       }
 
-      // 点击“插件”也可固定打开 / 关闭，避免仅 hover 不稳定。
       button?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
-
         const isOpen = gear?.classList.contains("dy-dl-plugin-open-v101");
-
-        if (isOpen) {
-          closeMenu();
-        } else {
-          openMenu();
-        }
-
+        if (isOpen) closeMenu(true);
+        else openMenu();
         this.onclick?.(event);
       });
+      button?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          button.click();
+        }
+      });
+      pinButton?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePin();
+      });
+      closeButton?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu(true);
+        button?.focus?.();
+      });
+
+      const cleanupDocumentListeners = () => {
+        document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+        document.removeEventListener("keydown", onDocumentKeyDown, true);
+      };
+      const onDocumentPointerDown = (event) => {
+        if (!root.isConnected) {
+          cleanupDocumentListeners();
+          return;
+        }
+        if (!root.contains(event.target)) closeMenu(false);
+      };
+      const onDocumentKeyDown = (event) => {
+        if (!root.isConnected) {
+          cleanupDocumentListeners();
+          return;
+        }
+        if (event.key === "Escape" && gear?.classList.contains("dy-dl-plugin-open-v101")) {
+          event.preventDefault();
+          closeMenu(true);
+          button?.focus?.();
+        }
+      };
+      document.addEventListener("pointerdown", onDocumentPointerDown, true);
+      document.addEventListener("keydown", onDocumentKeyDown, true);
 
       return root;
     }
@@ -11062,15 +11504,15 @@ const requires = this;
         width: "min(1180px, 92vw)", height: "min(760px, 88vh)", display: "flex", flexDirection: "column", overflow: "hidden",
         border: `1px solid ${theme.colors.borderLight}`, borderRadius: theme.borderRadius.lg, background: theme.colors.bgOverlay,
         color: theme.colors.textPrimary, boxShadow: theme.shadow.panel,
-        fontFamily: 'system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif',
+        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif',
       }),
       header: css({ padding: "20px 22px 16px", borderBottom: `1px solid ${theme.colors.borderLight}` }),
       headerTop: css({ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "18px", paddingRight: "42px" }),
       titleGroup: css({ display: "flex", gap: "12px", minWidth: 0 }),
-      titleIcon: css({ width: "36px", height: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "10px", background: theme.colors.primarySoft, color: "#8FA7FF" }),
+      titleIcon: css({ width: "36px", height: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "10px", background: theme.colors.primarySoft, color: theme.colors.primary }),
       title: css({ margin: 0, fontSize: "18px", fontWeight: 720, lineHeight: 1.25 }),
       subtitle: css({ marginTop: "4px", color: theme.colors.textMuted, fontSize: "12px" }),
-      statusTag: css({ minHeight: "28px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "0 10px", borderRadius: theme.borderRadius.full, border: `1px solid ${theme.colors.borderLight}`, background: theme.colors.bgControl, color: theme.colors.textSecondary, fontSize: "11px", fontWeight: 650 }),
+      statusTag: css({ minHeight: "28px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "0 10px", borderRadius: theme.borderRadius.full, border: `1px solid ${theme.colors.borderLight}`, background: theme.colors.bgControl, color: theme.colors.textSecondary, fontSize: "11px", fontWeight: 600 }),
       statusWrap: css({ position: "relative", display: "inline-flex", '&:hover [data-role="status-tip"]': { opacity: 1, visibility: "visible" }, '&:focus-within [data-role="status-tip"]': { opacity: 1, visibility: "visible" } }),
       statusTooltip: css({ position: "absolute", zIndex: 30, top: "36px", right: 0, width: "300px", padding: "12px 13px", border: `1px solid ${theme.colors.borderMedium}`, borderRadius: "11px", background: theme.colors.bgFieldset, boxShadow: theme.shadow.panel, opacity: 0, visibility: "hidden", pointerEvents: "none", color: theme.colors.textSecondary, fontSize: "11px", lineHeight: 1.55 }),
       tooltipTitle: css({ color: theme.colors.textPrimary, fontSize: "12px", fontWeight: 700, marginBottom: "8px" }),
@@ -11114,8 +11556,8 @@ const requires = this;
       inspectorMeta: css({ color: theme.colors.textMuted, fontSize: "11px" }),
       card: css({ marginTop: "16px", padding: "14px", border: `1px solid ${theme.colors.borderLight}`, borderRadius: "12px", background: theme.colors.bgFieldset }),
       cardHead: css({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", marginBottom: "10px" }),
-      cardLabel: css({ color: theme.colors.textMuted, fontSize: "11px", fontWeight: 650 }),
-      bigState: css({ display: "flex", alignItems: "center", gap: "8px", color: theme.colors.textPrimary, fontSize: "13px", fontWeight: 650 }),
+      cardLabel: css({ color: theme.colors.textMuted, fontSize: "11px", fontWeight: 600 }),
+      bigState: css({ display: "flex", alignItems: "center", gap: "8px", color: theme.colors.textPrimary, fontSize: "13px", fontWeight: 600 }),
       metrics: css({ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }),
       metric: css({ padding: "9px 10px", borderRadius: "9px", background: theme.colors.bgControl }),
       metricLabel: css({ color: theme.colors.textMuted, fontSize: "10px" }),
@@ -11125,8 +11567,8 @@ const requires = this;
         borderRadius: "7px", background: theme.colors.bgControl, color: theme.colors.textSecondary, fontSize: "11px", lineHeight: 1.65,
       }),
       actions: css({ display: "flex", flexDirection: "column", gap: "8px", marginTop: "14px" }),
-      primary: css({ minHeight: "38px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", border: "none", borderRadius: "9px", background: theme.colors.primary, color: "#fff", fontSize: "12px", fontWeight: 680, cursor: "pointer" }),
-      secondary: css({ minHeight: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", border: `1px solid ${theme.colors.borderLight}`, borderRadius: "9px", background: theme.colors.bgControl, color: theme.colors.textSecondary, fontSize: "12px", fontWeight: 620, cursor: "pointer" }),
+      primary: css({ minHeight: "38px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", border: "none", borderRadius: "9px", background: theme.colors.primary, color: "#0D0F10", fontSize: "12px", fontWeight: 600, cursor: "pointer" }),
+      secondary: css({ minHeight: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", border: `1px solid ${theme.colors.borderLight}`, borderRadius: "9px", background: theme.colors.bgControl, color: theme.colors.textSecondary, fontSize: "12px", fontWeight: 600, cursor: "pointer" }),
       dangerLink: css({ minHeight: "32px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "7px", border: "1px solid transparent", borderRadius: "8px", background: "transparent", color: theme.colors.textMuted, fontSize: "11px", cursor: "pointer", '&:hover': { color: theme.colors.danger, background: "#24161A" } }),
       footer: css({ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "10px 16px", borderTop: `1px solid ${theme.colors.borderLight}`, color: theme.colors.textMuted, fontSize: "10px", background: theme.colors.bgNav }),
       footerActions: css({ display: "flex", gap: "8px" }),
@@ -11819,38 +12261,26 @@ const requires = this;
       if (right_grid.querySelector(".dy-dl-video-btn")) return;
 
       const btn = new TooltipsButton(
-        "插件",
+        "媒体工具",
         [
           {
-            html: `<div class="xgTips item"><span>快捷键：</span><span class="shortcutKey">M</span>`,
-          },
-          {
-            label: "需求/反馈",
+            label: "下载当前作品",
+            icon: "download",
+            primary: true,
             callback: () => {
-              // V1.0.1：不再跳转外部网页，改为脚本内信息面板。
-              AboutPanel.open();
-            },
-          },
-          {
-            label: "设置",
-            callback: () => {
-              this.mediaHandler.open_config_modal();
-            },
-          },
-          {
-            label: "媒体详情",
-            callback: () => {
-              this.mediaHandler.show_media_details();
+              this.mediaHandler.download_current_media();
             },
           },
           {
             label: "提取原声",
+            icon: "music",
             callback: () => {
               this.mediaHandler.extract_original_audio();
             },
           },
           {
             label: "下载弹幕",
+            icon: "subtitles",
             callback: async () => {
               this.mediaHandler.refresh_player();
               if (!this.mediaHandler.player) {
@@ -11874,13 +12304,36 @@ const requires = this;
             },
           },
           {
-            label: "下载",
+            label: "媒体详情",
+            icon: "info",
             callback: () => {
-              this.mediaHandler.download_current_media();
+              this.mediaHandler.show_media_details();
             },
           },
+          {
+            label: "设置",
+            icon: "settings",
+            callback: () => {
+              this.mediaHandler.open_config_modal();
+            },
+          },
+          {
+            label: "需求 / 反馈",
+            icon: "messageSquare",
+            callback: () => {
+              AboutPanel.open();
+            },
+          },
+          {
+            html: `<div class="xgTips item dy-dl-plugin-shortcut-v112"><span>快捷键</span><kbd>M</kbd></div>`,
+          },
         ],
-        (e) => {}
+        () => {},
+        {
+          getStatus: () => this.mediaHandler.current_media
+            ? { label: "当前作品已就绪", tone: "success" }
+            : { label: "等待读取当前作品", tone: "idle" },
+        }
       );
       const downloadButton = btn.render();
 
@@ -12255,6 +12708,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     const style = document.createElement("style");
     style.id = "dy-dl-native-lite-style-v1";
+    style.dataset.linearToolUi = "true";
     style.textContent = `
       .dy-dl-toast-v1 {
         position: fixed;
@@ -12269,8 +12723,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         border-radius: 9px;
         background: #202327;
         box-shadow: 0 4px 12px rgba(0,0,0,.20);
-        color: #fff;
-        font: 650 12px/1.35 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        color: #F4FFFD;
+        font: 600 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
         pointer-events: none;
         user-select: none;
         white-space: normal;
@@ -12287,7 +12741,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         z-index: 2147483000;
         box-sizing: border-box;
         color: #eef0f3;
-        font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
       }
 
       .dy-dl-task-center-v104[hidden] {
@@ -12528,7 +12982,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         background: #25282d;
         box-shadow: 0 3px 10px rgba(0,0,0,.24);
         color: #f5f5f5;
-        font: 500 25px/1 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        font: 500 25px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
         cursor: pointer;
         user-select: none;
       }
@@ -12536,7 +12990,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-modal-close-v101:hover {
         border-color: rgba(254,44,85,.72);
         background: #32252a;
-        color: #fff;
+        color: #F4FFFD;
       }
 
       /* ================================================================
@@ -12571,7 +13025,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         color: #bf086a !important;
         box-shadow: 0 2px 8px rgba(0,0,0,.24) !important;
         font-size: 12px !important;
-        font-weight: 800 !important;
+        font-weight: 700 !important;
         line-height: 1 !important;
         cursor: pointer !important;
         pointer-events: auto !important;
@@ -12668,7 +13122,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         padding: 26px;
         padding-top: 24px;
         color: #e8eaed;
-        font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
       }
 
       .dy-dl-about-header {
@@ -12690,7 +13144,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         border-radius: 13px;
         background: #252127;
         color: #ff315f;
-        font-weight: 850;
+        font-weight: 700;
         letter-spacing: -.5px;
       }
 
@@ -12700,9 +13154,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       }
 
       .dy-dl-about-title {
-        color: #fff;
+        color: #F4FFFD;
         font-size: 20px;
-        font-weight: 800;
+        font-weight: 700;
         line-height: 1.25;
       }
 
@@ -12905,27 +13359,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
       /* ================================================================
-       * V1.0.6 Graphite Cobalt 产品设计系统
+       * V1.0.11 Immersive / Linear 产品设计系统
        * ================================================================ */
       :root {
-        --dy-dl-primary: #5B7CFA;
-        --dy-dl-primary-hover: #6E8CFF;
-        --dy-dl-primary-soft: #18213E;
-        --dy-dl-primary-border: #344B8E;
-        --dy-dl-bg-base: #0B0E13;
-        --dy-dl-bg-panel: #11151C;
-        --dy-dl-bg-card: #171C25;
-        --dy-dl-bg-control: #1E2530;
-        --dy-dl-bg-hover: #252D39;
-        --dy-dl-border: #2B3441;
-        --dy-dl-border-strong: #3B4656;
-        --dy-dl-text: #F4F7FB;
-        --dy-dl-text-secondary: #B2BBC8;
-        --dy-dl-text-muted: #7F8998;
-        --dy-dl-success: #36B887;
-        --dy-dl-warning: #D9A347;
-        --dy-dl-danger: #DF6670;
-        --dy-dl-info: #58A0FF;
+        --dy-dl-primary: #22C7D8;
+        --dy-dl-primary-hover: #35D7E7;
+        --dy-dl-primary-soft: #102A2E;
+        --dy-dl-primary-border: #245A61;
+        --dy-dl-bg-base: #0D0F10;
+        --dy-dl-bg-panel: #111315;
+        --dy-dl-bg-card: #17191C;
+        --dy-dl-bg-control: #1B1E22;
+        --dy-dl-bg-hover: #20242A;
+        --dy-dl-border: #24272B;
+        --dy-dl-border-strong: #32363C;
+        --dy-dl-text: #E6E7E9;
+        --dy-dl-text-secondary: #B9BCC2;
+        --dy-dl-text-muted: #8B8E94;
+        --dy-dl-success: #22C55E;
+        --dy-dl-warning: #EAB308;
+        --dy-dl-danger: #F0525E;
+        --dy-dl-info: #7C8CFF;
+        --dy-dl-font-sans: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
       }
 
       .dy-dl-inline-icon-v106,
@@ -12947,13 +13402,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         justify-content: center;
         gap: 8px;
         padding: 0 13px;
-        border-radius: 9px;
-        font: 650 12px/1 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        border-radius: 8px;
+        font: 500 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
         cursor: pointer;
       }
       .dy-dl-btn-v106 svg { width: 16px; height: 16px; }
-      .dy-dl-btn-primary-v106 { border: 1px solid transparent; background: var(--dy-dl-primary); color: #fff; }
-      .dy-dl-btn-primary-v106:hover { background: var(--dy-dl-primary-hover); }
+      .dy-dl-btn-primary-v106 { border: 1px solid var(--dy-dl-primary); background: var(--dy-dl-primary); color: #0D0F10; }
+      .dy-dl-btn-primary-v106:hover { background: var(--dy-dl-primary-hover); border-color: var(--dy-dl-primary-hover); }
       .dy-dl-btn-secondary-v106 { border: 1px solid var(--dy-dl-border); background: var(--dy-dl-bg-control); color: var(--dy-dl-text-secondary); }
       .dy-dl-btn-secondary-v106:hover { border-color: var(--dy-dl-border-strong); background: var(--dy-dl-bg-hover); color: var(--dy-dl-text); }
       .dy-dl-btn-danger-v106 { background: var(--dy-dl-danger) !important; color: #fff !important; }
@@ -12961,16 +13416,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-icon-btn-v106 svg { width: 16px; height: 16px; }
       .dy-dl-btn-v106:focus-visible,
       .dy-dl-icon-btn-v106:focus-visible,
-      .dy-dl-plugin-trigger-v101:focus-visible { outline: 2px solid #8FA7FF !important; outline-offset: 2px; }
+      .dy-dl-plugin-trigger-v101:focus-visible { outline: 2px solid var(--dy-dl-info) !important; outline-offset: 2px; }
 
       /* 产品级对话框 */
       .dy-dl-product-dialog-overlay-v106 { position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.66); }
-      .dy-dl-product-dialog-v106 { width: min(460px, calc(100vw - 40px)); box-sizing: border-box; padding: 22px; display: grid; grid-template-columns: 40px minmax(0,1fr); gap: 14px; border: 1px solid var(--dy-dl-border); border-radius: 16px; background: var(--dy-dl-bg-panel); box-shadow: 0 12px 36px rgba(0,0,0,.38); color: var(--dy-dl-text); font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
-      .dy-dl-product-dialog-icon-v106 { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 11px; background: var(--dy-dl-primary-soft); color: #8FA7FF; }
+      .dy-dl-product-dialog-v106 { width: min(460px, calc(100vw - 40px)); box-sizing: border-box; padding: 22px; display: grid; grid-template-columns: 40px minmax(0,1fr); gap: 14px; border: 1px solid var(--dy-dl-border); border-radius: 16px; background: var(--dy-dl-bg-panel); box-shadow: 0 12px 36px rgba(0,0,0,.38); color: var(--dy-dl-text); font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif; }
+      .dy-dl-product-dialog-icon-v106 { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 11px; background: var(--dy-dl-primary-soft); color: var(--dy-dl-info); }
       .dy-dl-product-dialog-icon-v106[data-tone="warning"] { background: #2A2417; color: #E7BE6A; }
       .dy-dl-product-dialog-icon-v106[data-tone="danger"] { background: #2B181C; color: #F09AA1; }
       .dy-dl-product-dialog-icon-v106 svg { width: 20px; height: 20px; }
-      .dy-dl-product-dialog-copy-v106 h3 { margin: 0; font-size: 16px; font-weight: 720; }
+      .dy-dl-product-dialog-copy-v106 h3 { margin: 0; font-size: 16px; font-weight: 700; }
       .dy-dl-product-dialog-message-v106 { margin: 9px 0 0; color: var(--dy-dl-text-secondary); font-size: 13px; line-height: 1.65; }
       .dy-dl-product-dialog-detail-v106 { margin: 8px 0 0; color: var(--dy-dl-text-muted); font-size: 11px; line-height: 1.6; }
       .dy-dl-product-dialog-actions-v106 { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
@@ -12979,13 +13434,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-toast-v1 { right: 0 !important; left: 0 !important; top: 18px !important; bottom: auto !important; width: max-content !important; margin: 0 auto !important; max-width: min(520px, calc(100vw - 36px)) !important; padding: 9px 13px !important; border-color: var(--dy-dl-border) !important; border-radius: 10px !important; background: var(--dy-dl-bg-panel) !important; color: var(--dy-dl-text-secondary) !important; box-shadow: 0 10px 30px rgba(0,0,0,.32) !important; font-size: 12px !important; transform: none !important; }
 
       /* 任务中心：批量永远胶囊，单文件才显示紧凑卡 */
-      .dy-dl-task-center-v106 { position: fixed; left: 20px; bottom: 20px; z-index: 2147483000; color: var(--dy-dl-text); font-family: system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+      .dy-dl-task-center-v106 { position: fixed; left: 20px; bottom: 20px; z-index: 2147483000; color: var(--dy-dl-text); font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif; }
       .dy-dl-task-center-v106[hidden] { display: none !important; }
       .dy-dl-task-capsule-v106 { position: relative; min-width: 168px; max-width: min(240px, calc(100vw - 40px)); height: 38px; display: none; align-items: center; gap: 9px; padding: 0 13px; overflow: hidden; border: 1px solid var(--dy-dl-border); border-radius: 999px; background: var(--dy-dl-bg-panel); box-shadow: 0 10px 28px rgba(0,0,0,.32); color: var(--dy-dl-text-secondary); cursor: pointer; }
       .dy-dl-task-center-v106[data-view="capsule"] .dy-dl-task-capsule-v106 { display: inline-flex; }
-      .dy-dl-task-capsule-icon-v106 { width: 17px; height: 17px; display: inline-flex; color: #8FA7FF; }
+      .dy-dl-task-capsule-icon-v106 { width: 17px; height: 17px; display: inline-flex; color: var(--dy-dl-info); }
       .dy-dl-task-capsule-icon-v106 svg { width: 17px; height: 17px; }
-      .dy-dl-task-capsule-text-v106 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 680; }
+      .dy-dl-task-capsule-text-v106 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
       .dy-dl-task-capsule-progress-v106 { position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; background: #232A35; }
       .dy-dl-task-capsule-progress-v106 i { display: block; width: 0; height: 100%; background: var(--dy-dl-primary); }
       .dy-dl-task-panel-v106 { width: min(370px, calc(100vw - 40px)); padding: 15px; border: 1px solid var(--dy-dl-border); border-radius: 14px; background: var(--dy-dl-bg-panel); box-shadow: 0 12px 36px rgba(0,0,0,.35); }
@@ -12995,13 +13450,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-task-title-v106 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
       .dy-dl-task-method-v106 { color: var(--dy-dl-text-muted); font-size: 10px; }
       .dy-dl-task-state-row-v106 { display: flex; align-items: center; gap: 8px; margin-top: 15px; }
-      .dy-dl-task-state-icon-v106 { width: 17px; height: 17px; color: #8FA7FF; }
+      .dy-dl-task-state-icon-v106 { width: 17px; height: 17px; color: var(--dy-dl-info); }
       .dy-dl-task-state-icon-v106 svg { width: 17px; height: 17px; }
       .dy-dl-task-status-v106 { flex: 1; min-width: 0; color: var(--dy-dl-text-secondary); font-size: 12px; }
-      .dy-dl-task-percent-v106 { font-size: 12px; font-variant-numeric: tabular-nums; }
+      .dy-dl-task-percent-v106 { font-size: 12px; font-variant-numeric: tabular-nums lining-nums; }
       .dy-dl-task-track-v106 { height: 5px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--dy-dl-bg-control); }
       .dy-dl-task-fill-v106 { width: 0; height: 100%; background: var(--dy-dl-primary); }
-      .dy-dl-task-metrics-v106 { display: flex; gap: 14px; margin-top: 9px; color: var(--dy-dl-text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+      .dy-dl-task-metrics-v106 { display: flex; gap: 14px; margin-top: 9px; color: var(--dy-dl-text-muted); font-size: 10px; font-variant-numeric: tabular-nums lining-nums; }
       .dy-dl-task-actions-v106 { display: flex; gap: 8px; margin-top: 14px; }
       .dy-dl-task-center-v106[data-phase="completed"] .dy-dl-task-state-icon-v106,
       .dy-dl-task-center-v106[data-phase="completed"] .dy-dl-task-capsule-icon-v106 { color: var(--dy-dl-success); }
@@ -13018,7 +13473,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-modal-close-v101:hover { border-color: var(--dy-dl-border-strong) !important; background: var(--dy-dl-bg-hover) !important; color: var(--dy-dl-text) !important; }
 
       /* 播放页插件入口：钴蓝工具按钮，与抖音原生控件区分 */
-      .dy-dl-plugin-trigger-v101 { min-height: 30px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 7px !important; padding: 0 10px !important; border: 1px solid var(--dy-dl-primary-border) !important; border-radius: 8px !important; background: var(--dy-dl-primary-soft) !important; color: #9AAEFF !important; font-size: 12px !important; font-weight: 700 !important; cursor: pointer !important; }
+      .dy-dl-plugin-trigger-v101 { min-height: 30px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 7px !important; padding: 0 10px !important; border: 1px solid var(--dy-dl-primary-border) !important; border-radius: 8px !important; background: var(--dy-dl-primary-soft) !important; color: var(--dy-dl-info) !important; font-size: 12px !important; font-weight: 700 !important; cursor: pointer !important; }
       .dy-dl-plugin-trigger-v101:hover { background: var(--dy-dl-primary) !important; border-color: var(--dy-dl-primary) !important; color: #fff !important; }
       .dy-dl-plugin-trigger-icon-v105 { width: 17px !important; height: 17px !important; }
       .dy-dl-plugin-menu-v101 { border-color: var(--dy-dl-border) !important; background: var(--dy-dl-bg-panel) !important; box-shadow: 0 12px 32px rgba(0,0,0,.36) !important; }
@@ -13031,13 +13486,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
       .dy-dl-about-root-v101 { background: var(--dy-dl-bg-panel) !important; border-color: var(--dy-dl-border) !important; }
-      .dy-dl-about-logo { border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-primary-soft) !important; color: #9AAEFF !important; }
+      .dy-dl-about-logo { border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-primary-soft) !important; color: var(--dy-dl-info) !important; }
       .dy-dl-about-project-card, .dy-dl-about-section { border-color: var(--dy-dl-border) !important; background: var(--dy-dl-bg-card) !important; }
       .dy-dl-about-dot { background: var(--dy-dl-primary) !important; }
 
       .dy-dl-author-stat-status { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; color: var(--dy-dl-text-muted); font-size: 11px; }
       .dy-dl-author-stat-status[data-state="failed"] { color: var(--dy-dl-warning); }
-      .dy-dl-author-stat-retry { min-height: 26px; padding: 0 9px; border: 1px solid var(--dy-dl-border); border-radius: 7px; background: var(--dy-dl-bg-control); color: var(--dy-dl-text-secondary); font: 650 11px/1 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; cursor: pointer; }
+      .dy-dl-author-stat-retry { min-height: 26px; padding: 0 9px; border: 1px solid var(--dy-dl-border); border-radius: 7px; background: var(--dy-dl-bg-control); color: var(--dy-dl-text-secondary); font: 600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif; cursor: pointer; }
       .dy-dl-author-stat-retry:hover { border-color: var(--dy-dl-primary-border); background: var(--dy-dl-bg-hover); color: var(--dy-dl-text); }
 
       @media (max-width: 820px) {
@@ -13057,7 +13512,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         border: 1px solid rgba(255,255,255,.18);
         border-radius: 8px;
         background: #202327;
-        color: #fff;
+        color: #F4FFFD;
         font-size: 14px;
         cursor: pointer;
       }
@@ -13076,8 +13531,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         border: 1px solid rgba(255,255,255,.24);
         border-radius: 999px;
         background: #202327;
-        color: #fff;
-        font: 650 12px/1 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+        color: #F4FFFD;
+        font: 600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
         cursor: pointer;
         user-select: none;
       }
@@ -13097,6 +13552,206 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       .dy-dl-feed-checkbox {
         margin: 0;
         cursor: pointer;
+      }
+
+
+      /* ================================================================
+       * V1.0.11 Unified Interaction UI — final overrides
+       * ================================================================ */
+      .dy-dl-video-btn,
+      .dy-dl-task-center-v106,
+      .dy-dl-product-dialog-v106,
+      .dy-dl-modal-root-v1,
+      .dy-dl-about-root-v101,
+      .dy-dl-feed-selector,
+      .dy-dl-native-lite-btn {
+        font-family: var(--dy-dl-font-sans) !important;
+      }
+
+      /* Immersive-style delayed tooltip. Native title is not required. */
+      [data-dy-tooltip] { position: relative; }
+      [data-dy-tooltip]::after {
+        content: attr(data-dy-tooltip);
+        position: absolute;
+        z-index: 2147483647;
+        left: 50%;
+        bottom: calc(100% + 8px);
+        transform: translate(-50%, 3px);
+        padding: 6px 8px;
+        border: 1px solid var(--dy-dl-border-strong);
+        border-radius: 6px;
+        background: #E6E7E9;
+        color: #16181B;
+        box-shadow: 0 8px 20px rgba(0,0,0,.24);
+        font: 500 11px/1.2 var(--dy-dl-font-sans);
+        white-space: nowrap;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 120ms ease 420ms, transform 120ms ease 420ms, visibility 0s linear 540ms;
+      }
+      [data-dy-tooltip]:hover::after,
+      [data-dy-tooltip]:focus-visible::after {
+        opacity: 1;
+        visibility: visible;
+        transform: translate(-50%, 0);
+        transition-delay: 420ms, 420ms, 0s;
+      }
+
+      /* Player Mini Entry */
+      .dy-dl-video-btn { width: 34px !important; min-width: 34px !important; }
+      .dy-dl-plugin-trigger-v101,
+      .dy-dl-plugin-trigger-mini-v112 {
+        width: 34px !important;
+        min-width: 34px !important;
+        height: 34px !important;
+        min-height: 34px !important;
+        padding: 0 !important;
+        border: 1px solid var(--dy-dl-border-strong) !important;
+        border-radius: 8px !important;
+        background: var(--dy-dl-bg-panel) !important;
+        color: var(--dy-dl-primary) !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,.24) !important;
+        font-weight: 500 !important;
+        transition: background 140ms ease, border-color 140ms ease, color 140ms ease !important;
+      }
+      .dy-dl-plugin-trigger-v101:hover,
+      .dy-dl-plugin-trigger-v101:focus-visible,
+      .dy-dl-plugin-active-v112 .dy-dl-plugin-trigger-v101 {
+        border-color: var(--dy-dl-primary-border) !important;
+        background: var(--dy-dl-primary-soft) !important;
+        color: var(--dy-dl-primary) !important;
+        outline: none !important;
+      }
+      .dy-dl-plugin-trigger-v101:focus-visible { box-shadow: 0 0 0 2px rgba(34,199,216,.24) !important; }
+      .dy-dl-plugin-trigger-icon-v105 { width: 17px !important; height: 17px !important; }
+      .dy-dl-plugin-trigger-icon-v105 path,
+      .dy-dl-plugin-trigger-icon-v105 circle,
+      .dy-dl-plugin-trigger-icon-v105 rect,
+      .dy-dl-plugin-trigger-icon-v105 polygon { vector-effect: non-scaling-stroke; }
+
+      /* Player Quick Panel / Popover */
+      .dy-dl-plugin-menu-v101 {
+        right: -4px !important;
+        bottom: calc(100% + 10px) !important;
+        width: 316px !important;
+        min-width: 316px !important;
+        max-width: min(316px, calc(100vw - 24px)) !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        border: 1px solid var(--dy-dl-border-strong) !important;
+        border-radius: 10px !important;
+        background: var(--dy-dl-bg-panel) !important;
+        box-shadow: 0 18px 42px rgba(0,0,0,.34) !important;
+      }
+      .dy-dl-plugin-menu-head-v112 {
+        min-height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 10px 10px 12px;
+        border-bottom: 1px solid var(--dy-dl-border);
+      }
+      .dy-dl-plugin-menu-heading-v112 { min-width: 0; display: flex; align-items: center; gap: 9px; }
+      .dy-dl-plugin-menu-heading-v112 > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+      .dy-dl-plugin-menu-heading-v112 strong { color: var(--dy-dl-text); font: 600 12px/1.2 var(--dy-dl-font-sans); }
+      .dy-dl-plugin-status-text-v112 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dy-dl-text-muted); font: 400 11px/1.25 var(--dy-dl-font-sans); }
+      .dy-dl-plugin-status-dot-v112 { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--dy-dl-text-muted); }
+      .dy-dl-plugin-status-dot-v112[data-tone="success"] { background: var(--dy-dl-success); }
+      .dy-dl-plugin-status-dot-v112[data-tone="warning"] { background: var(--dy-dl-warning); }
+      .dy-dl-plugin-status-dot-v112[data-tone="error"] { background: var(--dy-dl-danger); }
+      .dy-dl-plugin-status-dot-v112[data-tone="info"] { background: var(--dy-dl-info); }
+      .dy-dl-plugin-menu-actions-v112 { display: inline-flex; align-items: center; gap: 4px; }
+      .dy-dl-plugin-head-btn-v112 {
+        width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+        border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--dy-dl-text-muted); cursor: pointer;
+      }
+      .dy-dl-plugin-head-btn-v112:hover,
+      .dy-dl-plugin-head-btn-v112:focus-visible { border-color: var(--dy-dl-border); background: var(--dy-dl-bg-control); color: var(--dy-dl-text); outline: none; }
+      .dy-dl-plugin-head-btn-v112 svg { width: 15px; height: 15px; }
+      .dy-dl-plugin-pinned-v112 .dy-dl-plugin-pin-v112 { color: var(--dy-dl-primary); background: var(--dy-dl-primary-soft); }
+      .dy-dl-plugin-menu-body-v112 { padding: 6px; }
+      .dy-dl-plugin-item-v101 {
+        min-height: 36px !important;
+        gap: 9px !important;
+        padding: 0 9px !important;
+        border: 1px solid transparent !important;
+        border-radius: 7px !important;
+        color: var(--dy-dl-text-secondary) !important;
+        font: 500 12px/1.2 var(--dy-dl-font-sans) !important;
+      }
+      .dy-dl-plugin-item-v101:hover,
+      .dy-dl-plugin-item-v101:focus-visible { background: var(--dy-dl-bg-hover) !important; color: var(--dy-dl-text) !important; outline: none !important; }
+      .dy-dl-plugin-item-icon-v112 { width: 16px !important; height: 16px !important; color: var(--dy-dl-text-muted); flex: 0 0 16px; }
+      .dy-dl-plugin-item-primary-v112 { margin-bottom: 4px !important; border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-primary-soft) !important; color: var(--dy-dl-primary) !important; font-weight: 600 !important; }
+      .dy-dl-plugin-item-primary-v112 .dy-dl-plugin-item-icon-v112 { color: var(--dy-dl-primary); }
+      .dy-dl-plugin-shortcut-v112 { justify-content: space-between !important; min-height: 32px !important; margin-top: 5px; padding-top: 5px !important; border-top: 1px solid var(--dy-dl-border) !important; border-radius: 0 !important; color: var(--dy-dl-text-muted) !important; cursor: default !important; }
+      .dy-dl-plugin-shortcut-v112 kbd { min-width: 22px; padding: 3px 6px; border: 1px solid var(--dy-dl-border-strong); border-radius: 5px; background: var(--dy-dl-bg-control); color: var(--dy-dl-text-secondary); font: 500 10px/1 var(--dy-dl-font-sans); text-align: center; }
+
+      /* Product Dialog: Immersive overlay + explicit close */
+      .dy-dl-product-dialog-overlay-v106 { background: rgba(0,0,0,.52) !important; }
+      .dy-dl-product-dialog-v106 { position: relative; width: min(396px, calc(100vw - 32px)) !important; padding: 18px !important; gap: 12px !important; border-radius: 10px !important; }
+      .dy-dl-product-dialog-close-v112 {
+        position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+        border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--dy-dl-text-muted); cursor: pointer;
+      }
+      .dy-dl-product-dialog-close-v112:hover { border-color: var(--dy-dl-border); background: var(--dy-dl-bg-control); color: var(--dy-dl-text); }
+      .dy-dl-product-dialog-close-v112 svg { width: 15px; height: 15px; }
+      .dy-dl-product-dialog-icon-v106 { width: 34px !important; height: 34px !important; border-radius: 8px !important; }
+      .dy-dl-product-dialog-icon-v106 svg { width: 17px !important; height: 17px !important; }
+      .dy-dl-product-dialog-copy-v106 h3 { padding-right: 24px; font-size: 14px !important; font-weight: 600 !important; }
+      .dy-dl-product-dialog-message-v106 { font-size: 12px !important; line-height: 1.55 !important; }
+
+      /* Task Center: Capsule -> Panel -> Pin, mirroring Immersive progressive disclosure. */
+      .dy-dl-task-center-v106 { left: 18px !important; bottom: 18px !important; font-family: var(--dy-dl-font-sans) !important; }
+      .dy-dl-task-capsule-v106 { min-width: 156px !important; height: 36px !important; padding: 0 11px !important; border-radius: 9px !important; }
+      .dy-dl-task-capsule-text-v106 { font-weight: 500 !important; }
+      .dy-dl-task-panel-v106 { width: min(336px, calc(100vw - 36px)) !important; padding: 13px !important; border-radius: 10px !important; }
+      .dy-dl-task-head-actions-v112 { display: inline-flex; align-items: center; gap: 4px; }
+      .dy-dl-task-center-v106[data-pinned="true"] .dy-dl-task-pin-v112 { color: var(--dy-dl-primary); border-color: var(--dy-dl-primary-border); background: var(--dy-dl-primary-soft); }
+      .dy-dl-task-title-v106 { font-weight: 600 !important; }
+      .dy-dl-task-method-v106 { font-size: 11px !important; }
+      .dy-dl-task-percent-v106,
+      .dy-dl-task-metrics-v106,
+      .dy-dl-task-capsule-text-v106 { font-variant-numeric: tabular-nums lining-nums; }
+      .dy-dl-task-track-v106 { height: 3px !important; border-radius: 999px !important; }
+      .dy-dl-task-actions-v106 { justify-content: flex-end; }
+
+      /* Modal / About / settings visual normalization */
+      .dy-dl-modal-overlay-v1 { background: rgba(0,0,0,.52) !important; }
+      .dy-dl-modal-root-v1 { border-radius: 10px !important; }
+      .dy-dl-modal-close-v101 { border-radius: 7px !important; }
+      .dy-dl-about-root-v101 { border-radius: 10px !important; background: var(--dy-dl-bg-panel) !important; }
+      .dy-dl-about-panel-v101 { padding: 20px !important; font-family: var(--dy-dl-font-sans) !important; }
+      .dy-dl-about-logo { width: 40px !important; height: 40px !important; flex-basis: 40px !important; border-radius: 9px !important; color: var(--dy-dl-primary) !important; border-color: var(--dy-dl-primary-border) !important; background: var(--dy-dl-primary-soft) !important; font-weight: 700 !important; }
+      .dy-dl-about-title { font-size: 17px !important; font-weight: 600 !important; }
+      .dy-dl-about-project-card,
+      .dy-dl-about-section { border-radius: 8px !important; }
+      .dy-dl-about-dot { background: var(--dy-dl-primary) !important; }
+
+      /* Secondary injected controls also follow the same system. */
+      .dy-dl-native-lite-btn,
+      .dy-dl-feed-selector { border-color: var(--dy-dl-border-strong) !important; border-radius: 8px !important; background: var(--dy-dl-bg-panel) !important; color: var(--dy-dl-text-secondary) !important; font-size: 12px !important; font-weight: 500 !important; }
+      .dy-dl-native-lite-btn:hover,
+      .dy-dl-feed-selector:hover { background: var(--dy-dl-bg-hover) !important; color: var(--dy-dl-text) !important; }
+      .dy-dl-feed-checkbox { accent-color: var(--dy-dl-primary) !important; }
+
+      /* Toast: small, semantic, non-interruptive. */
+      .dy-dl-toast-v1 { top: 16px !important; padding: 8px 11px !important; border-radius: 8px !important; font: 500 11px/1.35 var(--dy-dl-font-sans) !important; align-items: center !important; gap: 8px !important; }
+      .dy-dl-toast-dot-v112 { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--dy-dl-info); }
+      .dy-dl-toast-v1[data-tone="success"] .dy-dl-toast-dot-v112 { background: var(--dy-dl-success); }
+      .dy-dl-toast-v1[data-tone="warning"] .dy-dl-toast-dot-v112 { background: var(--dy-dl-warning); }
+      .dy-dl-toast-v1[data-tone="error"] .dy-dl-toast-dot-v112 { background: var(--dy-dl-danger); }
+      .dy-dl-toast-text-v112 { min-width: 0; }
+
+      @media (max-width: 650px) {
+        .dy-dl-plugin-menu-v101 { width: min(316px, calc(100vw - 20px)) !important; min-width: 0 !important; }
+        .dy-dl-product-dialog-v106 { grid-template-columns: 32px minmax(0,1fr) !important; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [data-dy-tooltip]::after,
+        .dy-dl-plugin-trigger-v101 { transition: none !important; }
       }
     `;
 
@@ -13123,6 +13778,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   });
   const hotkeyManager = new HotkeyManager();
 
+  PassiveMediaEvidence.start(); // Read-Only Network Tap + Media Element Tap
   mediaHandler.init(); // Starts player detection
   domPatcher.startObserving(); // Starts DOM observation and initial scan
   profilePageHandler.mount_ui();
@@ -13130,5 +13786,5 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   hotkeyManager.addHotkey("m", () => mediaHandler.download_current_media());
   // #endregion
-  console.log("[dy-dl] V1.0.10 稳定增强版已启动");
+  console.log("[dy-dl] V1.0.11 Immersive Interaction UI / Passive Evidence Self-Healing 已启动");
 })();
