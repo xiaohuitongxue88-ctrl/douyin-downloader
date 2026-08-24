@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎵 Douyin Downloader
+# Douyin Downloader
 
 ### 抖音网页版增强下载工具
 
@@ -8,77 +8,119 @@
 
 [![点赞](https://img.shields.io/github/stars/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&logo=github&label=%E7%82%B9%E8%B5%9E&color=f5c518)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/stargazers)
 [![最近提交](https://img.shields.io/github/last-commit/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4&color=7c3aed)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/commits/main)
-[![最新版本](https://img.shields.io/github/v/release/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=ea580c&include_prereleases)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases/latest)
+[![问题](https://img.shields.io/github/issues/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E9%97%AE%E9%A2%98&color=0ea5e9)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues)
 [![许可证](https://img.shields.io/github/license/xiaohuitongxue88-ctrl/douyin-downloader?style=flat-square&label=%E8%AE%B8%E5%8F%AF%E8%AF%81&color=16a34a)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/LICENSE)
 
-[**立即安装脚本**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js) · [功能概览](#-功能概览) · [界面预览](#-界面预览) · [安装指南](#-安装与使用) · [问题反馈](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues)
+[**立即安装脚本**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js) · [功能概览](#功能概览) · [使用流程](#使用流程) · [功能架构](#功能架构) · [安装与使用](#安装与使用) · [问题反馈](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues)
 
 </div>
 
 > [!IMPORTANT]
-> 当前稳定版本为 **v1.0.10**。遇到问题时，请先通过上方“立即安装脚本”更新到最新版；若问题仍然存在，请在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索已有记录后再提交问题。
+> 当前稳定版本为 **v1.0.11**。如果已安装旧版本，重新打开上方“立即安装脚本”即可更新。
 
-## ✨ 项目简介
+## 项目简介
 
-Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。它将当前作品下载、作者主页批量扫描、下载任务管理和媒体信息查看整合到统一界面中，并兼顾操作响应、长期运行稳定性与低干扰体验。
+Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强工具，将当前作品下载、图集保存、原声音频提取、弹幕字幕、作者作品批量下载和任务管理集中到一个低干扰界面中。
 
-## 🚀 功能概览
+v1.0.11 对整体交互与视觉进行了重新设计：入口更轻量，操作面板更紧凑，支持悬停提示、固定面板、点击页面外部收起、`Esc` 关闭以及清晰的任务状态反馈。同时加强媒体地址变化后的自动恢复能力，并修复原声音频取消后状态残留、作品标题与下载文件名不一致等问题。
 
-| 使用场景 | 主要能力 |
+## 功能概览
+
+| 使用场景 | 可用能力 |
 | --- | --- |
-| 🎬 视频作品 | 下载无水印视频、高清封面，并按清晰度选择媒体资源 |
-| 🖼️ 图集作品 | 提取并批量下载高清原图 |
-| 🎵 音频提取 | 下载作品原声音频或背景音乐，并按实际媒体格式保存 |
-| 📦 作者主页 | 一次性扫描作者作品，支持快速全选、批量选择与提交任务 |
-| 💬 弹幕导出 | 将当前视频弹幕导出为带时间轴与样式的 `.ass` 字幕文件 |
-| 🧭 任务管理 | 查看下载进度、速度和任务状态，支持暂停、恢复与失败排查 |
-| 🔍 信息检查 | 查看媒体资源、作品信息、作者信息及原始 JSON 数据 |
-| ⚡ 下载方式 | 支持浏览器直接下载，并可选联动 Aria2 RPC 与 AB Download Manager |
+| 视频作品 | 下载无水印视频、高清封面，并按可用清晰度处理当前作品 |
+| 图集作品 | 识别当前图集并批量保存高清图片 |
+| 原声音频 | 提取作品原声音频或背景音乐，取消下载后状态会自动恢复 |
+| 弹幕字幕 | 将当前视频弹幕保存为带时间轴与样式的字幕文件 |
+| 作者主页 | 扫描当前作者作品，支持选择、全选和批量提交下载任务 |
+| 下载任务 | 查看进度、速度、剩余时间和任务状态，并支持暂停、恢复与失败重试 |
+| 媒体信息 | 查看当前作品可用的媒体内容和作品信息 |
+| 下载方式 | 可直接使用浏览器下载，也可按需连接 Aria2 RPC 或 AB Download Manager |
+| 自动恢复 | 当作品地址发生变化或短时失效时，自动重新寻找当前作品可用资源，减少重复操作 |
 
-### 设计与性能
+## 使用流程
 
-- 采用 **Graphite Cobalt** 视觉体系，界面简洁，信息层级清晰。
-- 采用按需加载与低资源 DOM 观察，避免无意义的常驻轮询。
-- 不使用高开销毛玻璃和持续动画，降低长时间运行时的资源占用。
-- 功能面板与原网页保持相对独立，尽量减少对抖音原有操作的干扰。
-- 支持快捷键 `M`，快速下载当前媒体。
+### 下载当前视频
 
-## 🆕 v1.0.10 更新亮点
+1. 打开抖音网页版并进入一个视频播放页。
+2. 在播放器操作区打开工具入口。
+3. 选择“下载当前作品”。
+4. 工具会识别当前作品并选择可用资源。
+5. 下载任务开始后，可在任务中心查看进度、速度和剩余时间。
+6. 下载完成后，文件直接保存到你选择的下载位置。
 
-- 修复作者信息页粉丝数量可能显示旧值、占位值或不准确数据的问题。
-- 强化作者 SecUID 归属校验，避免其他作者或无归属统计覆盖当前作者信息。
-- 优化作者主页统计补取与 10 分钟短时缓存，减少重复请求。
-- 增加作者主页已渲染粉丝数、获赞数的兼容兜底，提升网页结构调整后的可用性。
-- 全面复核单视频、图集、原声音频、弹幕 ASS、作者主页扫描、批量任务、暂停恢复与媒体详情等关键代码路径。
-- 保持低资源运行策略，不新增常驻轮询或持续动画。
+### 提取原声音频
 
-## 📸 界面预览
+1. 打开需要提取音频的作品。
+2. 打开工具面板并选择“提取原声”。
+3. 等待当前作品音频准备完成。
+4. 确认保存即可下载；如果取消，状态提示会自动结束，不会一直停留在“正在获取”。
 
-### 1. 播放页悬浮入口与快速下载
+### 下载图集
 
-进入视频播放页后，页面右下角会显示“插件”入口，可快速打开下载及配置菜单。
+1. 打开图集作品。
+2. 选择“下载当前作品”。
+3. 工具会识别图集中的高清图片。
+4. 按作品顺序保存全部图片。
 
-![播放页插件入口](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114600_342_86.png?raw=true)
+### 导出弹幕字幕
 
-### 2. 媒体资源与清晰度解析
+1. 打开有弹幕的视频作品。
+2. 在工具面板选择弹幕相关操作。
+3. 工具会整理当前作品的弹幕内容和时间位置。
+4. 保存后可直接配合常见播放器使用。
 
-可在独立窗口中查看高清封面、不同清晰度的视频源、音轨和原始 JSON 数据。
+### 批量下载作者作品
 
-![媒体资源解析](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114623_343_86.png?raw=true)
+1. 进入目标作者主页。
+2. 打开右侧媒体工作台。
+3. 扫描当前作者作品。
+4. 选择需要保存的作品，也可以直接全选。
+5. 提交批量任务。
+6. 在任务中心统一查看进度、暂停、恢复或重试失败任务。
 
-### 3. 作者主页批量扫描与选择
+### 快捷操作
 
-进入作者主页后，展开右下角批量控制面板，扫描作者作品，按需勾选并提交批量下载任务。
+- 按 `M`：快速处理当前媒体。
+- 悬停工具入口：显示功能提示。
+- 固定面板：需要连续操作时可保持面板展开。
+- 点击页面外部：未固定时自动收起面板。
+- 按 `Esc`：关闭当前展开的工具面板。
 
-![批量扫描面板](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114735_345_86.png?raw=true)
+## 功能架构
 
-### 4. 批量下载任务中心
+整个工具按实际使用过程分为六个区域，普通使用不需要了解任何内部实现细节。
 
-通过独立任务窗口查看下载进度、速度和状态，并对失败任务进行重试或排查。
+| 区域 | 作用 |
+| --- | --- |
+| 当前作品 | 识别你正在观看的视频、图集、音频和弹幕，并把最常用操作集中在播放器附近 |
+| 媒体处理 | 根据当前作品情况选择视频、图片、音频或字幕，并在地址变化时自动重新确认 |
+| 下载任务 | 统一显示单个和批量任务的进度、速度、剩余时间、完成或失败状态 |
+| 作者主页 | 扫描作者作品、批量选择并提交下载，不影响普通单作品下载 |
+| 设置中心 | 管理下载方式、清晰度选择、文件名、保存方式和常用偏好 |
+| 状态反馈 | 用轻量提示展示识别、恢复、下载、取消、完成和异常，不使用频繁弹窗打断浏览 |
 
-![批量下载任务中心](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260805114758_346_86.png?raw=true)
+整体使用路径：
 
-## 📖 安装与使用
+**打开抖音 → 识别当前作品 → 选择操作 → 自动确认可用内容 → 加入下载任务 → 查看进度 → 完成保存**
+
+作者主页批量路径：
+
+**进入作者主页 → 扫描作品 → 选择作品 → 批量提交 → 任务中心统一管理**
+
+## v1.0.11 更新内容
+
+- 整体重做工具界面与交互，采用更轻量、紧凑的播放器入口和操作面板。
+- 增加悬停提示、面板固定、点击外部收起、`Esc` 关闭等连续操作体验。
+- 优化任务中心的展开、固定、自动收起和下载状态反馈。
+- 作者主页工作台改为低干扰入口，批量功能保持完整。
+- 当当前作品媒体地址变化或短时失效时，增加自动恢复与重新确认。
+- 修复取消原声音频下载后“正在获取原声音频”提示长期残留的问题。
+- 默认下载文件名改为优先使用页面作品标题，不再让作者名、内部编号和话题标签抢占主文件名。
+- Windows 不允许直接作为文件名的符号会转换为视觉接近的字符，尽可能保持和页面标题一致。
+- 保持原有视频、图集、音频、弹幕、作者主页批量、任务暂停恢复和外部下载方式。
+
+## 安装与使用
 
 ### 第一步：安装 Tampermonkey
 
@@ -86,60 +128,84 @@ Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。
 
 ### 第二步：安装脚本
 
-点击 [**立即安装 Douyin Downloader**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js)，Tampermonkey 打开安装页面后，确认版本为 `1.0.10`，再点击“安装”。
+点击 [**立即安装 Douyin Downloader**](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js)。
+
+Tampermonkey 打开安装页面后，请确认版本为 **1.0.11**，再点击“安装”或“更新”。
 
 ### 第三步：开始使用
 
-- **下载当前作品**：打开任意抖音视频播放页，点击右下角“插件”，或按下快捷键 `M`。
-- **提取原声音频**：在播放器的“插件”菜单或媒体详情中选择“提取原声”。
-- **批量下载作品**：进入作者主页，展开右下角控制面板，扫描、选择并提交任务。
-- **调整高级设置**：在控制面板中打开“设置”，配置清晰度策略、文件名规则和外部下载器。
+安装完成后打开抖音网页版：
 
-文件名规则示例：`${nickname}_${short_id}`
+- 播放页可处理当前视频、图集、原声音频和弹幕。
+- 作者主页可扫描并批量选择作品。
+- 任务中心会显示正在进行和已经完成的下载。
+- 设置中可调整清晰度、文件名、下载方式等常用选项。
+
+### 文件名规则
+
+v1.0.11 默认优先使用**作品页面标题**作为文件名。
+
+例如页面显示：
+
+> 第84集：大明王朝84：贺表来了！《治安疏》是如何成为天下第一疏的？
+
+下载文件会尽可能保持同样的标题，只对 Windows 无法直接用于文件名的符号做兼容转换。
+
+如果你以前手动修改过文件名规则，工具会保留你的自定义设置，不会强制覆盖。
 
 ### 可选：连接外部下载器
 
-如需处理较多任务，可在设置中配置 **Aria2 RPC** 或 **AB Download Manager**。不配置外部下载器时，脚本仍可使用浏览器直接下载。
+如果需要处理大量任务，可在设置中配置 **Aria2 RPC** 或 **AB Download Manager**。
 
-## 🌐 兼容环境
+不配置外部下载器时，浏览器直接下载仍可正常使用。
+
+## 界面与交互
+
+v1.0.11 重点降低页面干扰：
+
+- 播放器入口保持小尺寸，不长期占用画面。
+- 悬停后显示功能提示。
+- 操作面板采用紧凑的信息层级。
+- 面板内部点击不会误关闭。
+- 未固定时点击页面外部自动收起。
+- 可固定面板进行连续操作。
+- `Esc` 可快速关闭当前面板。
+- 成功、等待、取消、异常使用不同状态提示，只有真正错误才使用红色。
+
+## 兼容环境
 
 - Chrome、Edge 及其他 Chromium 内核浏览器。
 - Tampermonkey 扩展。
 - 抖音网页版：`https://www.douyin.com/`
 
-> 抖音网页结构和接口可能随时调整。若功能突然失效，请先更新脚本并查看 Issues 中是否已有相关说明。
+> 抖音网页内容和页面结构可能随平台更新发生变化。如果功能突然失效，请先更新脚本并查看 Issues 中是否已有相关说明。
 
-## 🛠️ 问题反馈
+## 问题反馈
 
-提交问题前，请依次完成以下检查：
+提交问题前建议按以下顺序检查：
 
 1. 通过 [最新脚本地址](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/raw/refs/heads/main/douyin-dl.user.js) 重新安装或更新脚本。
 2. 按 `Ctrl + F5` 强制刷新抖音网页后重新测试。
-3. 在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索相同现象。
-4. 确认问题能够重复出现，并记录具体操作步骤。
+3. 在 [Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中搜索是否已经有相同现象。
+4. 确认问题可以重复出现，并记录操作步骤。
 
-新建 Issue 时，建议同时提供：
+提交 Issue 时建议提供：
 
 - 浏览器与 Tampermonkey 版本；
-- 出现问题的页面类型，例如播放页或作者主页；
+- 出现问题的页面类型，例如播放页、图集或作者主页；
 - 从打开页面到出现问题的完整操作步骤；
-- 错误截图；如方便，也可附上浏览器控制台中的相关报错。
+- 错误截图；
+- 如果方便，可补充页面控制台中的相关报错信息。
 
-你也可以加入 QQ 群交流：
+## 开源致谢
 
-<a href="https://qm.qq.com/cgi-bin/qm/qr?k=-SMNW4O5qbcPHHzFZLARGrN-7IX_5OCS&jump_from=webapi&authKey=w6zQgg9u7I7LyFPJda67hr6MWML+9x0xAV4VbZRE5F9ypeiPCkfOMa05yLhgQ/1N"><img src="https://pub.idqqimg.com/wpa/images/group.png" alt="加入 QQ 群：人生自古誰无死"></a>
+本项目基于 [zhzLuke96/douyin-dl-user-js](https://github.com/zhzLuke96/douyin-dl-user-js) 持续修改与扩展。感谢原项目作者的探索与开源分享。
 
-> 若加群链接失效，请直接在 [GitHub Issues](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/issues) 中留言。
+## 开源许可证
 
-## 🙏 开源致谢
+本项目采用 [MIT License](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/LICENSE) 开源。使用、修改或分发时，请保留适用的版权声明和许可证内容。
 
-本项目基于 [zhzLuke96/douyin-dl-user-js](https://github.com/zhzLuke96/douyin-dl-user-js) 进行界面重构、逻辑优化与功能扩展。感谢原项目作者的探索与开源分享。
-
-## 📄 开源许可证
-
-本项目采用 [MIT License](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/blob/main/LICENSE) 开源。使用、修改或分发时，请保留原有版权声明和许可证内容。
-
-## ⚖️ 免责声明
+## 免责声明
 
 > 本项目坚持开源、共享和免费，仅供技术研究与合法的个人数据备份使用。
 
@@ -152,8 +218,8 @@ Douyin Downloader 是一款面向抖音网页版的 Tampermonkey 增强脚本。
 
 <div align="center">
 
-如果这个项目对你有帮助，欢迎点亮一个 ⭐ Star。
+如果这个项目对你有帮助，欢迎点亮一个 Star。
 
-[返回顶部](#-douyin-downloader)
+[返回顶部](#douyin-downloader)
 
 </div>
