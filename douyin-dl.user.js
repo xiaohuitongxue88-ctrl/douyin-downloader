@@ -241,7 +241,7 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             this.host.id = 'dy-dl-tooltip-host';
             this.host.style.cssText = 'all:initial;position:fixed;z-index:2147483646;pointer-events:none;display:none;';
             const shadow = this.host.attachShadow({ mode: 'open' });
-            shadow.innerHTML = '<style>:host{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}div{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;max-width:250px;padding:7px 10px;border:1px solid #c9ddd3;border-radius:8px;background:#f9fffc;color:#26493b;font-size:12px;line-height:1.5;box-shadow:0 4px 16px #183c2420;overflow-wrap:anywhere}</style><div role="tooltip" id="tip"></div>';
+            shadow.innerHTML = '<style>:host{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}div{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;max-width:280px;padding:7px 10px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(23,25,30,.96);color:#fff;font-size:12px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.30);overflow-wrap:anywhere;backdrop-filter:blur(10px)}</style><div role="tooltip" id="tip"></div>';
             this.label = shadow.querySelector('#tip');
             (document.fullscreenElement || document.body).appendChild(this.host);
         },
@@ -2772,25 +2772,33 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
                 const remoteDeterminate = [TaskState.DOWNLOADING, TaskState.WRITING, TaskState.PACKING].includes(remoteState) && Number.isFinite(remotePercent);
                 const remoteActive = ACTIVE_TASK_STATES.has(remoteState);
                 const progress = remoteDeterminate ? Math.max(0, Math.min(100, remotePercent)) : null;
+                const remoteUnresolved = Math.max(0, Number(remote.unresolved || 0));
+                const remoteQueued = Number.isFinite(Number(remote.queued))
+                    ? Math.max(0, Number(remote.queued))
+                    : Math.max(0, remoteUnresolved - (remoteActive ? 1 : 0));
                 return {
                     ...stats,
-                    badgeCount: Number(remote.unresolved || 0),
-                    workingCount: Number(remote.unresolved || 0),
+                    badgeCount: remoteUnresolved,
+                    queueCount: remoteQueued,
+                    workingCount: remoteUnresolved,
                     issueCount: 0,
                     attentionCount: 0,
                     progress,
                     hasProgress: remoteDeterminate,
-                    showRing: remoteDeterminate || remoteActive,
-                    ringMode: remoteDeterminate ? "determinate" : remoteActive ? "indeterminate" : "hidden",
+                    showRing: Number(remote.unresolved || 0) > 0,
+                    ringMode: remoteDeterminate ? "determinate" : remoteActive ? "indeterminate" : "static",
                     ringAngle: remoteDeterminate ? progress * 3.6 : 0,
                     tone: remoteActive ? "running" : "idle",
                     tooltip: remoteDeterminate
-                        ? `其他标签页正在下载 · 当前 ${Math.round(progress)}% · 还剩 ${Number(remote.unresolved || 0)} 项`
-                        : `其他标签页正在处理 · 还剩 ${Number(remote.unresolved || 0)} 项`,
+                        ? `其他标签页正在下载 ${Math.round(progress)}% · 队列 ${remoteQueued}`
+                        : remoteActive
+                            ? `其他标签页正在处理 · 队列 ${remoteQueued}`
+                            : `其他标签页等待下载 · 队列 ${remoteQueued}`,
                     foreign: true,
                 };
             }
             const badgeCount = localBadgeCount;
+            const queueCount = stats.queued;
             const workingCount = stats.active + stats.queued;
             const issueCount = stats.failed + stats.unavailable;
             const attentionCount = stats.paused + stats.interrupted + stats.blocked;
@@ -2807,8 +2815,8 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             const progressState = normalizeTaskState(progressTask?.state || progressTask?.phase || TaskState.QUEUED);
             const hasProgress = Boolean(progressTask && [TaskState.DOWNLOADING, TaskState.WRITING, TaskState.PACKING, TaskState.PAUSED, TaskState.INTERRUPTED].includes(progressState) && Number.isFinite(Number(progressTask.percent)));
             const progress = hasProgress ? Math.max(0, Math.min(100, Number(progressTask.percent) || 0)) : null;
-            const showRing = Boolean(hasProgress || activeTask);
-            const ringMode = hasProgress ? 'determinate' : activeTask ? 'indeterminate' : 'hidden';
+            const showRing = badgeCount > 0;
+            const ringMode = hasProgress ? 'determinate' : activeTask || stats.queued > 0 ? 'indeterminate' : 'static';
             const ringAngle = hasProgress ? progress * 3.6 : 0;
             let tone = 'idle';
             if (stats.active > 0) tone = 'running';
@@ -2816,7 +2824,7 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             else if (stats.queued > 0) tone = 'running';
             else if (issueCount > 0) tone = 'error';
             let tooltip = '抖音下载';
-            if (stats.active > 0) tooltip = hasProgress ? `下载中 · 当前 ${Math.round(progress)}% · 还剩 ${badgeCount} 项` : `正在处理 · 还剩 ${badgeCount} 项`;
+            if (stats.active > 0) tooltip = hasProgress ? `正在下载 ${Math.round(progress)}% · 队列 ${queueCount}` : `正在处理 · 队列 ${queueCount}`;
             else if (stats.interrupted > 0) {
                 const parts = [`上次页面中断 ${stats.interrupted} 项`];
                 if (stats.queued) parts.push(`等待 ${stats.queued} 项`);
@@ -2825,11 +2833,12 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             }
             else if (stats.paused > 0) tooltip = `已暂停 · ${badgeCount} 项未完成`;
             else if (stats.blocked > 0) tooltip = `需要处理保存位置 · ${badgeCount} 项未完成`;
-            else if (stats.queued > 0) tooltip = `等待 ${stats.queued} 项 · 还剩 ${badgeCount} 项`;
+            else if (stats.queued > 0) tooltip = `等待下载 · 队列 ${queueCount}`;
             else if (issueCount > 0) tooltip = `${issueCount} 项需处理`;
             return {
                 ...stats,
                 badgeCount,
+                queueCount,
                 workingCount,
                 issueCount,
                 attentionCount,
@@ -3410,6 +3419,15 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             if (acquired) this._startHeartbeat(taskId);
             return acquired;
         }
+        renewLease(taskId = "") {
+            const current = this.readLease();
+            // 续租只能延长本标签页已经持有的租约，绝不抢占其他标签页。
+            if (!current || current?.tabId !== this.tabId) return false;
+            const nextTaskId = String(taskId || current.taskId || "");
+            const renewed = this._writeLease(nextTaskId);
+            if (renewed) this._startHeartbeat(nextTaskId);
+            return renewed;
+        }
         _startHeartbeat(taskId = "") {
             if (!this.heartbeatEnabled || !this.setIntervalFn || this.heartbeatTimer) return;
             const interval = Math.max(1000, Math.floor(this.leaseTtl / 3));
@@ -3963,6 +3981,8 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
                 || null;
             coordinator.publishStatus({
                 unresolved,
+                queued: stats.queued,
+                active: stats.active,
                 state: current?.state || TaskState.QUEUED,
                 percent: Number.isFinite(Number(current?.percent)) ? Number(current.percent) : NaN,
                 title: current?.title || "",
@@ -4048,7 +4068,19 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
         bind() {
             if (this.bound) return;
             this.bound = true;
-            this.offTaskChange = this.store.onChange(() => { this.scheduleSave(); this._publishTabStatus(); });
+            this.offTaskChange = this.store.onChange(change => {
+                const state = normalizeTaskState(change?.task?.state || change?.task?.phase);
+                const leaseRelevant = ACTIVE_TASK_STATES.has(state)
+                    && (change?.changeMask?.has?.("loaded")
+                        || change?.changeMask?.has?.("total")
+                        || change?.changeMask?.has?.("percent")
+                        || change?.changeMask?.has?.("speed")
+                        || change?.changeMask?.has?.("status")
+                        || change?.changeMask?.has?.("state"));
+                if (leaseRelevant) this.tabCoordinator?.renewLease?.(change.taskId);
+                this.scheduleSave();
+                this._publishTabStatus();
+            });
             window.addEventListener("pagehide", () => {
                 this.markActiveInterrupted("pagehide");
                 this.saveSession("pagehide");
@@ -6640,8 +6672,14 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             if (!gid)
                 return { ok: false, method: "aria2", reason: "aria2_missing_gid" };
             let cancelled = false;
+            let wakeAria2Poll = null;
+            const wakeAria2OnForeground = () => {
+                if (!document.hidden) wakeAria2Poll?.();
+            };
+            document.addEventListener("visibilitychange", wakeAria2OnForeground, { passive: true });
             const cancel = async () => {
                 cancelled = true;
+                wakeAria2Poll?.();
                 try {
                     await rpc("aria2.forceRemove", [gid]);
                 }
@@ -6683,7 +6721,17 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
                     }
                     emit({ phase: "downloading", status: status?.status === "paused" ? "aria2 已暂停" : "aria2 正在下载", loaded, total, speed, eta, percent });
                     await new Promise((resolve) => {
-                        setTimeout(resolve, 900);
+                        let settled = false;
+                        const finish = () => {
+                            if (settled) return;
+                            settled = true;
+                            if (wakeAria2Poll === finish) wakeAria2Poll = null;
+                            clearTimeout(timer);
+                            resolve();
+                        };
+                        const timer = setTimeout(finish, 900);
+                        // 从后台切回前台时立即结束等待，下一轮直接 tellStatus。
+                        wakeAria2Poll = finish;
                     });
                 }
                 return { ok: false, cancelled: true, method: "aria2", gid, reason: "cancelled" };
@@ -6693,6 +6741,9 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
                 return { ok: false, method: "aria2", gid, reason: "aria2_status_failed", error };
             }
             finally {
+                wakeAria2Poll?.();
+                wakeAria2Poll = null;
+                document.removeEventListener("visibilitychange", wakeAria2OnForeground);
                 DownloadRuntime.clearCancel(cancel);
                 if (options.showGlobalProgress !== false)
                     DownloadProgressCenter.setCancel(null);
@@ -8163,8 +8214,9 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
     /** 页面右侧单一入口：固定横轴，仅沿纵向拖动；事件和样式均限定于本工具。 */
     /** 右侧三入口，只沿纵向拖动。作者：小辉同學 | https://github.com/xiaohuitongxue88-ctrl/douyin-downloader */
     class FloatingPanel {
-        static SIZE = 44;
+        static SIZE = 36;
         static POSITION_KEY = '__douyin-dl-floating-position-v2__';
+        static COACH_KEY = '__douyin-dl-floating-coach-seen-v2__';
         constructor({ mediaHandler, profilePageHandler }) {
             this.mediaHandler = mediaHandler;
             this.profilePageHandler = profilePageHandler;
@@ -8176,7 +8228,7 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             this.root = document.createElement('div');
             this.root.id = 'dy-dl-floating-entry';
             this.root.className = 'dy-dl-floating-panel-root';
-            this.root.style.cssText = 'all:initial;position:fixed;right:14px;left:auto;top:50vh;width:44px;height:44px;z-index:2147483200;pointer-events:none;overflow:visible;';
+            this.root.style.cssText = 'all:initial;position:fixed;right:14px;left:auto;top:50vh;width:36px;height:36px;z-index:2147483200;pointer-events:none;overflow:visible;';
             this.shadow = this.root.attachShadow({ mode: 'open' });
             try {
                 const s = JSON.parse(localStorage.getItem(FloatingPanel.POSITION_KEY) || 'null');
@@ -8188,7 +8240,7 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
         }
         attachRoot() { const p = document.fullscreenElement || document.body; if (p && this.root.parentNode !== p)
             p.appendChild(this.root); }
-        bounds() { const h = innerHeight || document.documentElement.clientHeight; return { low: 8, high: Math.max(8, h - 136) }; }
+        bounds() { const h = innerHeight || document.documentElement.clientHeight; return { low: 44, high: Math.max(44, h - 120) }; }
         setTop(y) { const { low, high } = this.bounds(); const t = Math.round(Math.max(low, Math.min(high, Number(y) || low))); this.root.style.top = t + 'px'; this.root.style.right = (innerWidth <= 420 ? '10px' : '14px'); this.root.style.left = 'auto'; return t; }
         restorePosition() { const { low, high } = this.bounds(); this.setTop(low + (high - low) * this.yRatio); }
         savePosition() { const { low, high } = this.bounds(); this.yRatio = high > low ? (parseFloat(this.root.style.top) - low) / (high - low) : 0; try {
@@ -8203,15 +8255,41 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             node.hidden = false;
             this.ambientNoticeTimer = setTimeout(() => { if (node.isConnected) node.hidden = true; }, duration);
         }
+        showFirstUseCoach(force = false) {
+            const coach = this.shadow?.querySelector('#floatingCoach');
+            if (!coach) return;
+            if (!force) {
+                try { if (localStorage.getItem(FloatingPanel.COACH_KEY) === '1') return; } catch { }
+            }
+            clearTimeout(this.coachTimer);
+            this.coachTimer = null;
+            coach.hidden = false;
+            requestAnimationFrame(() => { if (coach.isConnected) coach.dataset.visible = 'true'; });
+        }
+        hideFirstUseCoach(markSeen = true) {
+            const coach = this.shadow?.querySelector('#floatingCoach');
+            clearTimeout(this.coachTimer);
+            this.coachTimer = null;
+            if (coach) {
+                coach.dataset.visible = 'false';
+                setTimeout(() => { if (coach.isConnected && coach.dataset.visible !== 'true') coach.hidden = true; }, 220);
+            }
+            if (markSeen) {
+                try { localStorage.setItem(FloatingPanel.COACH_KEY, '1'); } catch { }
+            }
+        }
         updateAmbientStatus() {
             if (!this.mounted) return;
             const view = AmbientStatusPolicy.for({ tasks: UnifiedTasks.list(), remoteStatus: this.mediaHandler.tabCoordinator?.getRemoteStatus?.() || null });
-            const badge = this.shadow.querySelector('#ambientBadge');
+            const count = this.shadow.querySelector('#ambientCount');
             const progress = this.shadow.querySelector('#ambientProgress');
             const shell = this.shadow.querySelector('#ambientShell');
-            if (badge) {
-                badge.hidden = view.badgeCount <= 0;
-                badge.textContent = view.badgeCount > 99 ? '99+' : String(view.badgeCount || '');
+            if (count) {
+                count.textContent = view.queueCount > 99 ? '99+' : String(view.queueCount || '');
+            }
+            if (progress) {
+                progress.dataset.tip = view.tooltip || '下载状态';
+                progress.setAttribute('aria-label', view.tooltip || '下载状态');
             }
             if (progress) {
                 progress.hidden = !view.showRing;
@@ -8225,8 +8303,8 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             if (this.button) {
                 this.button.dataset.ambientTone = view.tone;
                 this.button.dataset.ambientProgress = String(view.showRing);
-                this.button.dataset.tip = view.tooltip || '抖音下载 · 按住可上下拖动';
-                this.button.setAttribute('aria-label', view.badgeCount ? `抖音下载，${view.tooltip}` : '打开抖音下载');
+                this.button.dataset.tip = '点击下载';
+                this.button.setAttribute('aria-label', view.badgeCount ? `媒体下载，${view.tooltip}` : '媒体下载，可上下拖拽移动位置');
                 ProductTooltip.refresh(this.button);
             }
             const previous = this.ambientView;
@@ -8247,7 +8325,7 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             clearTimeout(this.collapseTimer);
             this.expanded = !!value && !this.drag;
             this.root.dataset.expanded = String(this.expanded);
-            this.root.style.height = this.expanded ? '128px' : '44px';
+            this.root.style.height = this.expanded ? '120px' : '36px';
             for (const b of this.quick || []) {
                 b.disabled = !this.expanded;
                 b.tabIndex = this.expanded ? 0 : -1;
@@ -8269,11 +8347,20 @@ button:hover .dy-copy .front-copy,button:focus-visible .dy-copy .front-copy{anim
             const opt = { signal: this.lifecycle.signal };
             this.shadow.innerHTML = `<style>
 :host([hidden]){display:none!important}:host{font-family:system-ui}*{box-sizing:border-box}
-.dock{position:relative;width:44px;height:100%;pointer-events:auto;overflow:visible}.dock button{position:absolute;left:4px;width:36px;height:36px;display:grid;place-items:center;margin:0;padding:0;border:1px solid #c9ddd1;border-radius:50%;background:#fff;color:#23866f;box-shadow:0 3px 12px #375c481c;cursor:pointer;touch-action:manipulation}
-.ambient-shell{position:absolute;left:0;top:0;width:44px;height:44px;overflow:visible;pointer-events:none}#floatingEntry{left:4px;top:4px;pointer-events:auto;touch-action:none;cursor:grab;overflow:visible;background:linear-gradient(135deg,#fff,#eefaf7)}#dockTasks{top:48px}#dockSupport{top:92px}.quick{visibility:hidden;opacity:0;pointer-events:none;transition:opacity .14s}
-:host([data-expanded="true"]) .quick{visibility:visible;opacity:1;pointer-events:auto}button:hover{background:#eaf6f0;border-color:#96c6b3}button:focus-visible{outline:2px solid #258974;outline-offset:-3px}button svg{width:20px;height:20px;pointer-events:none}:host([data-dragging="true"]) #floatingEntry{cursor:grabbing}
-.ambient-icon{display:grid;place-items:center;position:relative;z-index:2}.ambient-icon>svg{width:20px;height:20px}.ambient-shell{--ambient-ring:#23866f;--ambient-track:#d8e6df}#ambientProgress{position:absolute;inset:0;width:44px;height:44px;border-radius:50%;pointer-events:none;z-index:0;background:conic-gradient(from -90deg,var(--ambient-ring) 0deg var(--ambient-angle,0deg),var(--ambient-track) var(--ambient-angle,0deg) 360deg);box-shadow:0 0 7px #23866f26}#ambientProgress[data-mode="indeterminate"]{--ambient-angle:54deg;animation:ambient-ring-spin 1.05s linear infinite}@keyframes ambient-ring-spin{to{transform:rotate(360deg)}}#floatingEntry{z-index:1}#ambientShell[data-ambient-progress="true"] #floatingEntry{border-color:transparent;box-shadow:0 3px 12px #375c481c,0 0 0 1px #e0ebe5 inset}#ambientBadge{position:absolute;z-index:4;top:-6px;left:-6px;display:grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border:2px solid #fff;border-radius:9px;background:#23866f;color:#fff;font:600 10px/1 system-ui;box-shadow:0 2px 7px #234b3b2b;font-variant-numeric:lining-nums tabular-nums}#ambientBadge[hidden],#ambientProgress[hidden],#ambientNotice[hidden]{display:none!important}#ambientShell[data-ambient-tone="attention"]{--ambient-ring:#9a6a2e;--ambient-track:#efe4d1}#ambientShell[data-ambient-tone="attention"] #floatingEntry{color:#9a6a2e;border-color:#e2cda7}#ambientShell[data-ambient-tone="attention"] #ambientBadge{background:#9a6a2e}#ambientShell[data-ambient-tone="error"]{--ambient-ring:#a75454;--ambient-track:#f0dede}#ambientShell[data-ambient-tone="error"] #floatingEntry{color:#a75454;border-color:#e1bcbc}#ambientShell[data-ambient-tone="error"] #ambientBadge{background:#a75454}@media (prefers-reduced-motion:reduce){#ambientProgress[data-mode="indeterminate"]{animation:none}}:host([data-reduce="true"]) #ambientProgress[data-mode="indeterminate"]{animation:none}#ambientNotice{position:absolute;right:50px;top:5px;max-width:230px;white-space:nowrap;padding:8px 11px;border:1px solid #d8e5de;border-radius:9px;background:#fff;color:#38554a;box-shadow:0 8px 24px #244a381c;font:500 11px/1.45 system-ui;pointer-events:none}
-${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambientShell"><div id="ambientProgress" aria-hidden="true" hidden></div><button id="floatingEntry" type="button" aria-label="打开抖音下载" data-tip="抖音下载 · 按住可上下拖动"><span class="ambient-icon">${MotionIcons.sparkle}</span><span id="ambientBadge" hidden></span></button></div><div id="ambientNotice" role="status" aria-live="polite" hidden></div><button id="dockTasks" type="button" class="quick" aria-label="查看下载任务" data-tip="下载任务 · 查看进度">${iconMarkup('listChecks')}</button><button id="dockSupport" type="button" class="quick" aria-label="帮助与支持" data-tip="帮助与支持 · 帮助 / 反馈 / 关于">${MotionIcons.help}</button></div>`;
+.dock{position:relative;width:36px;height:100%;pointer-events:auto;overflow:visible}.dock button{position:absolute;left:0;width:36px;height:36px;display:grid;place-items:center;margin:0;padding:0;border:1px solid #c9ddd1;border-radius:50%;background:#fff;color:#23866f;box-shadow:0 3px 12px #375c481c;cursor:pointer;touch-action:manipulation}
+.ambient-shell{position:absolute;left:0;top:0;width:36px;height:36px;overflow:visible;pointer-events:none;--ambient-ring:#16bfa5;--ambient-track:#d7e7e2}#floatingEntry{left:0;top:0;z-index:2;pointer-events:auto;touch-action:none;cursor:grab;overflow:hidden;color:#fff;border-color:#8fe2d4;background:linear-gradient(180deg,#1bc9ad,#11ab92);box-shadow:0 5px 15px #0000004d,0 0 0 1px #00000019,inset 0 1px #ffffff4d}#floatingEntry:hover{filter:brightness(1.05);border-color:#b8efe6;box-shadow:0 6px 17px #00000054,0 0 0 2px #16bfa533,inset 0 1px #ffffff4d}#floatingEntry:focus-visible{outline:2px solid #7be2d0;outline-offset:2px}:host([data-dragging="true"]) #floatingEntry{cursor:grabbing}
+#floatingEntry::before{content:"";position:absolute;top:-25%;bottom:-25%;left:-70%;width:55%;z-index:1;pointer-events:none;transform:skewX(-18deg) translateX(-120%);background:linear-gradient(105deg,transparent 0%,#ffffff14 20%,#ffffff85 50%,#ffffff1a 78%,transparent 100%);animation:floating-shimmer 2s ease-in-out infinite}@keyframes floating-shimmer{0%{transform:skewX(-18deg) translateX(-120%)}25%{transform:skewX(-18deg) translateX(430%)}25.01%,100%{transform:skewX(-18deg) translateX(430%)}}
+.ambient-icon{display:grid;place-items:center;position:relative;z-index:2}.ambient-icon>svg{width:18px;height:18px;stroke-width:2.35}.ambient-icon svg{pointer-events:none}
+#ambientProgress{position:absolute;left:3px;top:-36px;width:30px;height:30px;border-radius:50%;pointer-events:auto;z-index:1;background:transparent;filter:drop-shadow(0 1px 2px #00000070) drop-shadow(0 2px 5px #00000040)}#ambientProgress::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from -90deg,var(--ambient-ring) 0deg var(--ambient-angle,0deg),var(--ambient-track) var(--ambient-angle,0deg) 360deg);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0);mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 0)}#ambientCount{position:absolute;inset:0;display:grid;place-items:center;z-index:2;color:#FFB000;font:800 10px/1 system-ui;text-shadow:0 1px 2px #000000e6,0 0 4px #00000080;font-variant-numeric:lining-nums tabular-nums;pointer-events:none}#ambientProgress[data-mode="indeterminate"]::before{--ambient-angle:54deg;animation:ambient-ring-spin .9s linear infinite}#ambientProgress[data-mode="static"]{--ambient-angle:0deg}@keyframes ambient-ring-spin{to{transform:rotate(360deg)}}#ambientProgress[hidden],#ambientNotice[hidden],#floatingCoach[hidden]{display:none!important}
+
+#ambientProgress[data-tip]::after{content:attr(data-tip);position:absolute;right:38px;top:50%;transform:translateY(-50%) translateX(4px);white-space:nowrap;padding:6px 8px;border-radius:8px;background:#17191ef5;color:#fff;font:650 10.5px/1 system-ui;box-shadow:0 6px 16px #00000040;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .14s ease,transform .14s ease,visibility .14s ease;z-index:6}
+#ambientProgress[data-tip]:hover::after{opacity:1;visibility:visible;transform:translateY(-50%) translateX(0)}
+#ambientShell[data-ambient-tone="attention"]{--ambient-ring:#b8843f;--ambient-track:#5d5242}#ambientShell[data-ambient-tone="error"]{--ambient-ring:#d46a6a;--ambient-track:#684747}
+#dockTasks{top:42px}#dockSupport{top:84px}.quick{visibility:hidden;opacity:0;pointer-events:none;transition:opacity .14s}:host([data-expanded="true"]) .quick{visibility:visible;opacity:1;pointer-events:auto}.quick:hover{background:#eaf6f0;border-color:#96c6b3}.quick:focus-visible{outline:2px solid #258974;outline-offset:-3px}.quick svg{width:19px;height:19px;pointer-events:none}
+#floatingCoach{position:absolute;right:45px;top:-1px;width:max-content;max-width:150px;min-width:0;padding:7px 9px;border:1px solid #ffffff1f;border-radius:10px;background:#15171bed;color:#fff;box-shadow:0 9px 24px #0000004d;backdrop-filter:blur(10px);pointer-events:none;opacity:0;transform:translateX(5px) scale(.98);transition:opacity .2s ease,transform .2s ease}#floatingCoach[data-visible="true"]{opacity:1;transform:translateX(0) scale(1)}#floatingCoach::after{content:"";position:absolute;right:-5px;top:50%;width:9px;height:9px;transform:translateY(-50%) rotate(45deg);background:#15171bed;border-top:1px solid #ffffff1f;border-right:1px solid #ffffff1f}.coach-title{display:flex;align-items:center;gap:6px;font:760 12px/1.2 system-ui}.coach-title svg{width:13px;height:13px;color:#16bfa5}.coach-sub{margin-top:4px;color:#ffffffad;font:500 10.5px/1.25 system-ui;white-space:nowrap}
+#ambientNotice{position:absolute;right:44px;top:2px;max-width:230px;white-space:nowrap;padding:8px 11px;border:1px solid #d8e5de;border-radius:9px;background:#fff;color:#38554a;box-shadow:0 8px 24px #244a381c;font:500 11px/1.45 system-ui;pointer-events:none}
+@media (prefers-reduced-motion:reduce){#ambientProgress[data-mode="indeterminate"],#floatingEntry::before{animation:none!important}}:host([data-reduce="true"]) #ambientProgress[data-mode="indeterminate"],:host([data-reduce="true"]) #floatingEntry::before{animation:none!important}
+${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambientShell"><div id="ambientProgress" aria-hidden="true" hidden><span id="ambientCount"></span></div><button id="floatingEntry" type="button" aria-label="媒体下载，可上下拖拽移动位置" data-tip="媒体下载"><span class="ambient-icon">${iconMarkup('download')}</span></button></div><div id="floatingCoach" role="status" hidden><div class="coach-title">${iconMarkup('download')}<span>抖音下载</span></div><div class="coach-sub">可上下拖拽移动位置</div></div><div id="ambientNotice" role="status" aria-live="polite" hidden></div><button id="dockTasks" type="button" class="quick" aria-label="查看下载任务" data-tip="下载任务 · 查看进度">${iconMarkup('listChecks')}</button><button id="dockSupport" type="button" class="quick" aria-label="帮助与支持" data-tip="帮助与支持 · 帮助 / 反馈 / 关于">${MotionIcons.help}</button></div>`;
             this.button = this.shadow.querySelector('#floatingEntry');
             this.quick = [...this.shadow.querySelectorAll('.quick')];
             this.offAmbient = UnifiedTasks.onChange(() => this.updateAmbientStatus());
@@ -8281,6 +8368,7 @@ ${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambie
             this.updateAmbientStatus();
             ProductTooltip.bind(this.shadow);
             this.shadow.querySelector('.dock').addEventListener('pointerenter', () => this.expandLater(), opt);
+            this.button.addEventListener('pointerenter', () => this.hideFirstUseCoach(true), opt);
             this.shadow.querySelector('.dock').addEventListener('pointerleave', () => this.collapseLater(), opt);
             this.shadow.addEventListener('focusin', e => { if (e.target.matches(':focus-visible'))
                 this.setExpanded(true); }, opt);
@@ -8302,7 +8390,7 @@ ${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambie
                 catch { }
             };
             this.button.addEventListener('pointerdown', e => { if (e.button !== 0 || e.isPrimary === false)
-                return; this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, top: parseFloat(this.root.style.top), moved: false }; this.suppressClick = false; this.setExpanded(false); try {
+                return; this.hideFirstUseCoach(true); this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, top: parseFloat(this.root.style.top), moved: false }; this.suppressClick = false; this.setExpanded(false); try {
                 this.button.setPointerCapture(e.pointerId);
             }
             catch { } }, opt);
@@ -8321,7 +8409,7 @@ ${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambie
                 this.suppressClick = false;
                 e.preventDefault();
                 return;
-            } this.mediaHandler.workbench.safe(() => this.mediaHandler.workbench.open('works', { keyboard: e.detail === 0, source: this.button })); this.expandLater(); }, opt);
+            } this.hideFirstUseCoach(true); this.mediaHandler.workbench.safe(() => this.mediaHandler.workbench.open('works', { keyboard: e.detail === 0, source: this.button })); this.expandLater(); }, opt);
             this.button.addEventListener('keydown', e => { if (['ArrowUp', 'ArrowDown'].includes(e.key)) {
                 e.preventDefault();
                 this.setTop(parseFloat(this.root.style.top) + (e.shiftKey ? 24 : 8) * (e.key === 'ArrowUp' ? -1 : 1));
@@ -8344,9 +8432,10 @@ ${MotionIcons.css}</style><div class="dock"><div class="ambient-shell" id="ambie
             this.root.dataset.reduce = String(!!Config.global.features.reduce_motion);
             this.restorePosition();
             this.show();
+            this.showFirstUseCoach(false);
             this.mediaHandler.floatingPanel = this;
         }
-        unmount() { this.lifecycle?.abort(); this.offTheme?.(); this.offAmbient?.(); this.offAmbient = null; clearTimeout(this.expandTimer); clearTimeout(this.collapseTimer); clearTimeout(this.ambientNoticeTimer); this.shadow.replaceChildren(); this.mounted = false; this.drag = null; this.hide(); }
+        unmount() { this.lifecycle?.abort(); this.offTheme?.(); this.offAmbient?.(); this.offAmbient = null; clearTimeout(this.expandTimer); clearTimeout(this.collapseTimer); clearTimeout(this.ambientNoticeTimer); clearTimeout(this.coachTimer); this.shadow.replaceChildren(); this.mounted = false; this.drag = null; this.hide(); }
         hide() { this.root.hidden = true; this.setExpanded(false); }
         show() { this.root.hidden = false; }
         syncVisibility() { if (!this.mounted)
@@ -12249,7 +12338,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       @media (max-width: 820px) {
         .dy-dl-product-dialog-v106 { grid-template-columns: 34px minmax(0,1fr); padding: 18px; }
       }
-      @media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce) {
         .dy-dl-btn-v106, .dy-dl-icon-btn-v106, .dy-dl-plugin-trigger-v101 { transition: none !important; }
       }
 
@@ -12322,11 +12411,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         bottom: calc(100% + 8px);
         transform: translate(-50%, 3px);
         padding: 6px 8px;
-        border: 1px solid var(--dy-dl-border-strong);
-        border-radius: 6px;
-        background: #E6E7E9;
-        color: #16181B;
-        box-shadow: 0 8px 20px rgba(0,0,0,.24);
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 7px;
+        background: rgba(23,25,30,.96);
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(0,0,0,.30);
         font: 500 11px/1.2 var(--dy-dl-font-sans);
         white-space: nowrap;
         opacity: 0;
@@ -12752,7 +12841,7 @@ h1{font-size:24px;letter-spacing:-.02em;font-weight:650}
 .sparkle-bottom{transform-origin:18px 18px}
 .floating-entry{position:fixed;right:0;top:69%;z-index:90;cursor:grab;border-top-right-radius:0;border-bottom-right-radius:0}
 .floating-entry.dragging{cursor:grabbing;transition:none;box-shadow:0 3px 12px #35796935}
-.design-tooltip{position:fixed;z-index:10000;max-width:calc(100vw - 16px);padding:7px 10px;border:1px solid var(--s-border);border-radius:7px;background:var(--s-bg);color:var(--s-text);box-shadow:0 4px 16px #263e2817;font:11px/1.6 var(--font);white-space:nowrap;pointer-events:none}
+.design-tooltip{position:fixed;z-index:10000;max-width:calc(100vw - 16px);padding:7px 10px;border:1px solid #ffffff1f;border-radius:7px;background:#17191ef5;color:#fff;box-shadow:0 8px 24px #0000004d;font:11px/1.6 var(--font);white-space:nowrap;pointer-events:none;backdrop-filter:blur(10px)}
 .single-dialog{width:420px;max-width:calc(100vw - 28px);padding:19px;max-height:min(780px,88vh);overflow:auto;background:var(--s-bg)}
 .single-dialog-head{display:flex;justify-content:space-between;gap:15px;align-items:flex-start}
 .single-dialog-head h3{font-size:18px;margin:7px 0 0}
@@ -15418,6 +15507,20 @@ h1{font-size:24px;letter-spacing:-.02em;font-weight:650}
             mediaHandler.floatingPanel?.updateAmbientStatus?.();
         }
     }, { passive: true });
+
+    const syncForegroundDownloadState = () => {
+        if (document.hidden) return;
+        const activeId = String(mediaHandler.scheduler?.activeId || "");
+        if (activeId) tabCoordinator.renewLease(activeId);
+        publishCurrentTabStatus();
+        try { tabChannel?.postMessage?.({ type: "status-request", tabId, at: Date.now() }); } catch {}
+        mediaHandler.floatingPanel?.updateAmbientStatus?.();
+        if (mediaHandler.workbench?.opened && mediaHandler.workbench.tab === "tasks" && !mediaHandler.workbench.page) {
+            mediaHandler.workbench.renderTasks();
+        }
+    };
+    document.addEventListener("visibilitychange", syncForegroundDownloadState, { passive: true });
+    window.addEventListener("pageshow", syncForegroundDownloadState, { passive: true });
     taskPersistence.restoreSession();
     taskPersistence.bind();
     mediaHandler.taskPersistence = taskPersistence;
