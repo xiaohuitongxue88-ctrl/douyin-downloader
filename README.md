@@ -8,7 +8,7 @@
 
 [![img](https://img.shields.io/github/stars/xiaohuitongxue88-ctrl/douyin-downloader?label=%E7%82%B9%E8%B5%9E)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader)
 [![img](https://img.shields.io/github/last-commit/xiaohuitongxue88-ctrl/douyin-downloader?label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader)
-[![img](https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v2.1.0-f26b21)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases)
+[![img](https://img.shields.io/badge/%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-v2.1.2-0aa88f)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases)
 [![img](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-GPL--3.0--only-4c1)](LICENSE)
 [![img](https://img.shields.io/github/downloads/xiaohuitongxue88-ctrl/douyin-downloader/total?label=%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://github.com/xiaohuitongxue88-ctrl/douyin-downloader/releases)
 
